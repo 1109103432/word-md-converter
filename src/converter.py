@@ -14,6 +14,7 @@ import re
 import os
 import subprocess
 import zipfile
+from copy import deepcopy
 from pathlib import Path
 from lxml import etree
 from docx import Document
@@ -345,18 +346,14 @@ def _w(tag: str) -> str:
 
 def _fix_headings_via_lxml(src_path: Path, dst_path: Path) -> bool:
     """
-    通过 lxml + zipfile 直接修改 docx 内部 XML，将非标准标题样式
-    改名为 Pandoc 可识别的 "heading N" 名称。
+    通过 lxml + zipfile 直接修改 docx 内部 XML，做两件事：
 
-    策略（零破坏）：
-      只修改 styles.xml 中样式的 w:name，不碰 document.xml，
-      不新建样式，不改变 pStyle 引用。所有 run 结构（含 <w:br/>）
-      完整原样保留。
+    1. 标题样式改名 — styles.xml 中 outlineLvl=0~5 的样式若名称
+       非 "heading N"，改为 "heading N"（Pandoc 据此识别标题）
+    2. 手动换行符转段落 — document.xml 中所有 <w:br/> 替换为段落
+       分割（消除 Pandoc GFM 的硬换行标记及粗体错乱问题）
 
-    流程：
-      1. 读取 styles.xml，找 outlineLvl=0~5 的样式
-      2. 若 w:name 非 "heading N"，改为 "heading N"
-      3. 原样复制其余文件到临时 zip
+    全部操作仅改动 XML 文本，不经过 python-docx save()。
 
     Returns:
         True 表示有修改，False 表示无需修改（调用方可直接用原文件）。
@@ -365,28 +362,55 @@ def _fix_headings_via_lxml(src_path: Path, dst_path: Path) -> bool:
     with zipfile.ZipFile(src_path, "r") as zf:
         zip_data = {name: zf.read(name) for name in zf.namelist()}
 
-    if "word/styles.xml" not in zip_data:
-        return False
-
     nsmap = {"w": _WML_NS}
-
-    # ── 2. 解析 styles.xml → 改名不标准的标题样式 ──
-    styles_root = etree.fromstring(zip_data["word/styles.xml"])
     modified = False
 
+    # ── 2. 样式改名 ──
+    styles_root = None
+    if "word/styles.xml" in zip_data:
+        styles_root = etree.fromstring(zip_data["word/styles.xml"])
+        modified |= _rename_heading_styles(styles_root, nsmap)
+
+    # ── 3. <w:br/> → 段落分割 ──
+    doc_root = None
+    if "word/document.xml" in zip_data:
+        doc_root = etree.fromstring(zip_data["word/document.xml"])
+        modified |= _convert_breaks_to_paragraphs(doc_root, nsmap)
+
+    if not modified:
+        return False
+
+    # ── 4. 写入新 zip ──
+    with zipfile.ZipFile(dst_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in zip_data.items():
+            if name == "word/styles.xml" and styles_root is not None:
+                zf.writestr(name, etree.tostring(
+                    styles_root, xml_declaration=True, encoding="UTF-8", standalone=True))
+            elif name == "word/document.xml" and doc_root is not None:
+                zf.writestr(name, etree.tostring(
+                    doc_root, xml_declaration=True, encoding="UTF-8", standalone=True))
+            else:
+                zf.writestr(name, data)
+
+    return True
+
+
+def _rename_heading_styles(styles_root, nsmap: dict) -> bool:
+    """
+    将 styles.xml 中 outlineLvl=0~5 但名称非 "heading N" 的样式改名。
+    返回 True 表示至少有一个样式被改名。
+    """
+    modified = False
     for style_elem in styles_root.findall("w:style", nsmap):
-        # 只处理段落样式
         if style_elem.get(_w("type")) != "paragraph":
             continue
 
-        # 检查 outlineLvl
         pPr = style_elem.find("w:pPr", nsmap)
         if pPr is None:
             continue
         ol = pPr.find("w:outlineLvl", nsmap)
         if ol is None:
             continue
-
         val_str = ol.get(_w("val"))
         if val_str is None:
             continue
@@ -398,8 +422,6 @@ def _fix_headings_via_lxml(src_path: Path, dst_path: Path) -> bool:
             continue
 
         heading_lvl = olvl + 1
-
-        # 检查当前名称是否已是标准 "heading N"
         name_elem = style_elem.find("w:name", nsmap)
         if name_elem is None:
             continue
@@ -408,23 +430,116 @@ def _fix_headings_via_lxml(src_path: Path, dst_path: Path) -> bool:
         if current_name.lower() == target_name:
             continue
 
-        # 改名（保留所有其他属性——字体、段落间距、编号等）
         name_elem.set(_w("val"), target_name)
         modified = True
 
-    if not modified:
+    return modified
+
+
+def _convert_breaks_to_paragraphs(doc_root, nsmap: dict) -> bool:
+    """
+    将 document.xml 中所有 <w:br/>（手动换行符）替换为段落分割。
+
+    每个 <w:br/> 所在的段落被拆分为两个独立段落，
+    各自继承原段落的 pPr 和对应 run 的 rPr（粗体、斜体等）。
+    不包含 <w:br/> 的段落原样保留。
+
+    返回 True 表示至少有一个段落被拆分。
+    """
+    # 收集所有含 <w:br/> 的段落（避免遍历时修改树）
+    paras_with_br = []
+    for para in doc_root.findall(".//w:p", nsmap):
+        if para.find(".//w:br", nsmap) is not None:
+            paras_with_br.append(para)
+
+    if not paras_with_br:
         return False
 
-    # ── 3. 写入新 zip ──
-    with zipfile.ZipFile(dst_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        for name, data in zip_data.items():
-            if name == "word/styles.xml":
-                zf.writestr(name, etree.tostring(
-                    styles_root, xml_declaration=True, encoding="UTF-8", standalone=True))
-            else:
-                zf.writestr(name, data)
+    for para in paras_with_br:
+        new_paras = _split_para_at_breaks(para, nsmap)
+        if len(new_paras) <= 1:
+            continue
+        parent = para.getparent()
+        if parent is None:
+            continue
+        children = list(parent)
+        idx = children.index(para)
+        parent[idx] = new_paras[0]
+        for i, np_elem in enumerate(new_paras[1:], 1):
+            parent.insert(idx + i, np_elem)
 
     return True
+
+
+def _split_para_at_breaks(para, nsmap: dict) -> list:
+    """
+    在 <w:br/> 处拆分 w:p，返回新 w:p 元素列表。
+
+    每个段落继承原段落的 pPr（样式等）。含 <w:br/> 的 run
+    被拆分：<w:br/> 前的文本留在当前段，后的文本进入下一段，
+    各段的 run 都保留原 rPr（粗体/斜体等格式）。
+    """
+    pPr = para.find("w:pPr", nsmap)
+
+    segments = []     # 最终结果：每个 segment 是一个元素列表
+    current = []      # 当前 segment 的元素
+
+    for child in para:
+        if child.tag == _w("pPr"):
+            continue  # pPr 单独处理
+
+        if child.tag == _w("r"):
+            br_elems = child.findall("w:br", nsmap)
+            if br_elems:
+                # 该 run 含 <w:br/>，拆分
+                rPr = child.find("w:rPr", nsmap)
+                sub = []  # 当前子段内的 w:t 等
+                for rc in child:
+                    if rc.tag == _w("br"):
+                        # 遇到 br：收束当前子段为一个 run，结束当前 segment
+                        if sub:
+                            new_r = _make_run_element(rPr, sub)
+                            current.append(new_r)
+                            sub = []
+                        segments.append(current)
+                        current = []
+                    else:
+                        sub.append(deepcopy(rc))
+                # 最后一个 br 之后的剩余内容
+                if sub:
+                    new_r = _make_run_element(rPr, sub)
+                    current.append(new_r)
+            else:
+                current.append(deepcopy(child))
+        else:
+            current.append(deepcopy(child))
+
+    segments.append(current)
+
+    if len(segments) <= 1:
+        return [para]  # 没有拆分
+
+    # 构建新段落
+    result = []
+    for seg in segments:
+        new_para = etree.Element(_w("p"))
+        if pPr is not None:
+            new_para.append(deepcopy(pPr))
+        for elem in seg:
+            new_para.append(elem)
+        result.append(new_para)
+
+    return result
+
+
+def _make_run_element(rPr, children: list):
+    """创建 w:r 元素，附带 rPr（如有）和子元素列表。"""
+    r = etree.Element(_w("r"))
+    if rPr is not None:
+        r.append(deepcopy(rPr))
+    for c in children:
+        r.append(c)
+    return r
 
 
 def _docx_to_md_native(docx_path: Path, config: dict) -> str:
