@@ -1,0 +1,26 @@
+{
+  "heading_mapping": {
+    "md_to_word": {
+      "#": "Heading 1",
+      "##": "Heading 2",
+      "###": "Heading 3",
+      "####": "Heading 4",
+      "#####": "Heading 5",
+      "######": "Heading 6"
+    }
+  },
+  "extract_images": true,
+  "image_folder": "images",
+  "preserve_tables": true,
+  "preserve_lists": true,
+  "preserve_hyperlinks": true,
+  "output_encoding": "utf-8",
+  "add_toc": true,
+  "pandoc_reference_doc": "built-in",
+  "notification": {
+    "enabled": true,
+    "show_success": true,
+    "duration": "5秒",
+    "show_output_path": true
+  }
+}

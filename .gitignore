@@ -1,0 +1,23 @@
+# 构建产物
+build/
+dist/
+*.spec
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 打包输出
+*.zip
+
+# Claude
+.claude/
+
+# IDE
+.vscode/
+.idea/
+
+# 系统
+Thumbs.db
+Desktop.ini
