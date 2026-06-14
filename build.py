@@ -114,7 +114,7 @@ def build_exe(config: dict) -> bool:
 
 def main():
     print("=" * 60)
-    print("  Word ↔ Markdown 转换工具 — PyInstaller 打包")
+    print("  Word <-> Markdown 转换工具 - PyInstaller 打包")
     print("=" * 60)
     print(f"  Python: {sys.version}")
     print(f"  项目根目录: {ROOT}")
