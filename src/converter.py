@@ -13,7 +13,9 @@ MD→Word 流程:
 import re
 import os
 import subprocess
+import zipfile
 from pathlib import Path
+from lxml import etree
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -274,10 +276,11 @@ def _docx_to_md_via_pandoc(docx_path: Path, output_path: Path,
     """
     Pandoc 驱动的 Word→Markdown 转换。
 
-    预处理步骤（python-docx）：
-      读取每个段落的样式大纲级别 (w:outlineLvl)，若有 outlineLvl=0~5，
-      则将段落样式强制改为标准 "Heading N" 名称。
-      这解决了中文 Word 中 "标题 1" 等样式名不被 Pandoc 识别的问题。
+    预处理步骤（lxml + zipfile，不经过 python-docx save）：
+      读取 styles.xml，建立 styleId→outlineLvl 映射；
+      遍历 document.xml 中每个段落，若其样式的 outlineLvl=0~5，
+      则将 w:pStyle 改为标准 "HeadingN"。
+      直接操作 XML，完全保留原始 run 结构（<w:br/> 等不被破坏）。
 
     Pandoc 参数：
       -f docx -t gfm: GitHub Flavored Markdown（表格/列表完美支持）
@@ -287,15 +290,12 @@ def _docx_to_md_via_pandoc(docx_path: Path, output_path: Path,
     output_dir = output_path.parent
     img_folder = config.get("image_folder", "images")
 
-    # ── 1. 预处理：大纲级别 → 标准 Heading 样式 ──
-    doc = Document(str(docx_path))
-    modified = _normalize_heading_styles(doc)
+    # ── 1. 预处理：lxml 直接操作 XML（绕过 python-docx save）──
+    temp_docx = output_dir / f"._temp_{docx_path.stem}.docx"
+    modified = _fix_headings_via_lxml(docx_path, temp_docx)
 
-    # 保存临时文件（如有修改）或直接用原文件
-    if modified:
-        temp_docx = output_dir / f"._temp_{docx_path.stem}.docx"
-        doc.save(str(temp_docx))
-    else:
+    if not modified:
+        # 无需修改，直接用原文件
         temp_docx = docx_path
 
     try:
@@ -332,47 +332,99 @@ def _docx_to_md_via_pandoc(docx_path: Path, output_path: Path,
             temp_docx.unlink()
 
 
-def _normalize_heading_styles(doc) -> bool:
-    """
-    遍历文档段落，读取样式大纲级别，强制改为标准 "Heading N" 样式名。
+# ── lxml + zipfile 实现的 docx 样式修正（不破坏 run 结构）──
 
-    这让 Pandoc 能正确识别中文 Word 中的标题（如 "标题 1"→"Heading 1"）。
+# OOXML 命名空间
+_WML_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+
+def _w(tag: str) -> str:
+    """生成带 wml 命名空间的标签名。"""
+    return f"{{{_WML_NS}}}{tag}"
+
+
+def _fix_headings_via_lxml(src_path: Path, dst_path: Path) -> bool:
+    """
+    通过 lxml + zipfile 直接修改 docx 内部 XML，将非标准标题样式
+    改名为 Pandoc 可识别的 "heading N" 名称。
+
+    策略（零破坏）：
+      只修改 styles.xml 中样式的 w:name，不碰 document.xml，
+      不新建样式，不改变 pStyle 引用。所有 run 结构（含 <w:br/>）
+      完整原样保留。
+
+    流程：
+      1. 读取 styles.xml，找 outlineLvl=0~5 的样式
+      2. 若 w:name 非 "heading N"，改为 "heading N"
+      3. 原样复制其余文件到临时 zip
 
     Returns:
-        True 表示有段落被修改，False 表示无需修改。
+        True 表示有修改，False 表示无需修改（调用方可直接用原文件）。
     """
+    # ── 1. 读取原始 zip ──
+    with zipfile.ZipFile(src_path, "r") as zf:
+        zip_data = {name: zf.read(name) for name in zf.namelist()}
+
+    if "word/styles.xml" not in zip_data:
+        return False
+
+    nsmap = {"w": _WML_NS}
+
+    # ── 2. 解析 styles.xml → 改名不标准的标题样式 ──
+    styles_root = etree.fromstring(zip_data["word/styles.xml"])
     modified = False
-    # 预检/创建标准 Heading 样式
-    heading_styles = {}
-    for lvl in range(1, 7):
-        name = f"Heading {lvl}"
+
+    for style_elem in styles_root.findall("w:style", nsmap):
+        # 只处理段落样式
+        if style_elem.get(_w("type")) != "paragraph":
+            continue
+
+        # 检查 outlineLvl
+        pPr = style_elem.find("w:pPr", nsmap)
+        if pPr is None:
+            continue
+        ol = pPr.find("w:outlineLvl", nsmap)
+        if ol is None:
+            continue
+
+        val_str = ol.get(_w("val"))
+        if val_str is None:
+            continue
         try:
-            heading_styles[lvl] = doc.styles[name]
-        except KeyError:
-            try:
-                heading_styles[lvl] = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
-            except Exception:
-                heading_styles[lvl] = None
-
-    for para in doc.paragraphs:
-        lvl = _auto_detect_heading_level(para)
-        if lvl is None or not (1 <= lvl <= 6):
+            olvl = int(val_str)
+        except ValueError:
+            continue
+        if not (0 <= olvl <= 5):
             continue
 
-        # 已经是标准 Heading N 样式则跳过
-        if para.style and para.style.name == f"Heading {lvl}":
+        heading_lvl = olvl + 1
+
+        # 检查当前名称是否已是标准 "heading N"
+        name_elem = style_elem.find("w:name", nsmap)
+        if name_elem is None:
+            continue
+        current_name = name_elem.get(_w("val"), "")
+        target_name = f"heading {heading_lvl}"
+        if current_name.lower() == target_name:
             continue
 
-        # 强制设为标准样式
-        target_style = heading_styles.get(lvl)
-        if target_style is not None:
-            try:
-                para.style = target_style
-                modified = True
-            except Exception:
-                pass
+        # 改名（保留所有其他属性——字体、段落间距、编号等）
+        name_elem.set(_w("val"), target_name)
+        modified = True
 
-    return modified
+    if not modified:
+        return False
+
+    # ── 3. 写入新 zip ──
+    with zipfile.ZipFile(dst_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in zip_data.items():
+            if name == "word/styles.xml":
+                zf.writestr(name, etree.tostring(
+                    styles_root, xml_declaration=True, encoding="UTF-8", standalone=True))
+            else:
+                zf.writestr(name, data)
+
+    return True
 
 
 def _docx_to_md_native(docx_path: Path, config: dict) -> str:
