@@ -346,14 +346,11 @@ def _w(tag: str) -> str:
 
 def _fix_headings_via_lxml(src_path: Path, dst_path: Path) -> bool:
     """
-    通过 lxml + zipfile 直接修改 docx 内部 XML，做两件事：
+    通过 lxml + zipfile 直接修改 docx 内部 XML，做三件事：
 
-    1. 标题样式改名 — styles.xml 中 outlineLvl=0~5 的样式若名称
-       非 "heading N"，改为 "heading N"（Pandoc 据此识别标题）
-    2. 手动换行符转段落 — document.xml 中所有 <w:br/> 替换为段落
-       分割（消除 Pandoc GFM 的硬换行标记及粗体错乱问题）
-
-    全部操作仅改动 XML 文本，不经过 python-docx save()。
+    1. 标题样式改名
+    2. 分节符 → 水平分割线
+    3. 手动换行符 → 段落分割
 
     Returns:
         True 表示有修改，False 表示无需修改（调用方可直接用原文件）。
@@ -371,10 +368,14 @@ def _fix_headings_via_lxml(src_path: Path, dst_path: Path) -> bool:
         styles_root = etree.fromstring(zip_data["word/styles.xml"])
         modified |= _rename_heading_styles(styles_root, nsmap)
 
-    # ── 3. <w:br/> → 段落分割 ──
+    # ── 3. <w:sectPr> → 水平分割线 ──
     doc_root = None
     if "word/document.xml" in zip_data:
         doc_root = etree.fromstring(zip_data["word/document.xml"])
+        modified |= _convert_section_breaks_to_rules(doc_root, nsmap)
+
+    # ── 4. <w:br/> → 段落分割 ──
+    if doc_root is not None:
         modified |= _convert_breaks_to_paragraphs(doc_root, nsmap)
 
     if not modified:
@@ -431,6 +432,51 @@ def _rename_heading_styles(styles_root, nsmap: dict) -> bool:
             continue
 
         name_elem.set(_w("val"), target_name)
+        modified = True
+
+    return modified
+
+
+def _convert_section_breaks_to_rules(doc_root, nsmap: dict) -> bool:
+    """
+    将 document.xml 中段落级 <w:sectPr>（分节符）替换为水平线标记。
+
+    OOXML 中分节符出现为 w:p/w:pPr/w:sectPr，Pandoc 可能将其误解析为
+    标题。此处移除 w:sectPr 并给段落添加底部边框，Pandoc 会将带底部
+    边框的空段落识别为水平分割线（markdown 中即 ---）。
+
+    w:body/w:sectPr 是最后一节的属性，不是分节符，不处理。
+
+    返回 True 表示至少有一个分节符被转换。
+    """
+    modified = False
+
+    for para in doc_root.findall(".//w:p", nsmap):
+        pPr = para.find("w:pPr", nsmap)
+        if pPr is None:
+            continue
+        sectPr = pPr.find("w:sectPr", nsmap)
+        if sectPr is None:
+            continue
+
+        # 这是段落级分节符
+        # 1. 移除 w:sectPr
+        pPr.remove(sectPr)
+
+        # 2. 清空段落文本（分节符段落通常是空的）
+        for r in para.findall("w:r", nsmap):
+            para.remove(r)
+
+        # 3. 添加底部边框（Pandoc 据此识别水平分割线）
+        pBdr = pPr.find("w:pBdr", nsmap)
+        if pBdr is None:
+            pBdr = etree.SubElement(pPr, _w("pBdr"))
+        bottom = etree.SubElement(pBdr, _w("bottom"))
+        bottom.set(_w("val"), "single")
+        bottom.set(_w("sz"), "12")
+        bottom.set(_w("space"), "1")
+        bottom.set(_w("color"), "auto")
+
         modified = True
 
     return modified
