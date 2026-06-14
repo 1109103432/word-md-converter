@@ -1,7 +1,8 @@
 """
 Word ↔ Markdown 统一转换入口
 用法：将 .docx 或 .md 文件拖放到桌面"转换工具"图标上即可自动识别并转换。
-     或命令行：python converter_launcher.py <文件路径>
+     支持同时拖入多个文件。
+     或命令行：python converter_launcher.py <文件1> <文件2> ...
 
 自动判断规则：
   - .docx → 转换为 .md (Markdown)
@@ -32,79 +33,134 @@ def main():
     duration = notif.get("duration", "short")
 
     if len(sys.argv) < 2:
-        # 没有拖入文件 — 显示使用提示
         show_notification(
             title="Word ↔ Markdown 转换工具",
             message="请将文件拖放到此图标上即可自动转换。\n\n"
                     "📄  拖入 .docx → 自动转为 .md\n"
                     "📝  拖入 .md   → 自动转为 .docx\n\n"
+                    "📦  支持同时拖入多个文件\n"
                     "输出位置：原文件所在目录",
             auto_close=8,
         )
         return
 
-    input_path = Path(sys.argv[1])
+    # ── 收集并分类所有输入文件 ──
+    word_files = []   # (Path, suffix)
+    md_files = []
+    not_found = []
+    unsupported = []
 
-    # 文件存在性检查
-    if not input_path.exists():
+    for arg in sys.argv[1:]:
+        p = Path(arg)
+        if not p.exists():
+            not_found.append(p)
+            continue
+        suffix = p.suffix.lower()
+        if suffix in WORD_EXTENSIONS:
+            word_files.append(p)
+        elif suffix in MD_EXTENSIONS:
+            md_files.append(p)
+        else:
+            unsupported.append(p)
+
+    # ── 统计 ──
+    ok, fail = 0, 0
+    total = len(word_files) + len(md_files) + len(not_found) + len(unsupported)
+    batch_mode = total > 1
+
+    for p in word_files:
+        if _convert_word_to_md(p, config, duration, notify=not batch_mode):
+            ok += 1
+        else:
+            fail += 1
+
+    for p in md_files:
+        if _convert_md_to_word(p, config, duration, notify=not batch_mode):
+            ok += 1
+        else:
+            fail += 1
+
+    # ── 汇总通知 ──
+    if total == 0:
+        return
+    if total == 1 and ok + fail > 0:
+        # 单文件且已处理：通知已在上方显示，无需汇总
+        return
+    if total == 1 and not_found:
         show_notification(
             title="转换失败",
-            message=f"找不到文件：\n{input_path}",
+            message=f"找不到文件：\n{not_found[0]}",
+            is_error=True,
+            auto_close=10,
+        )
+        return
+    if total == 1 and unsupported:
+        p = unsupported[0]
+        show_notification(
+            title="格式不支持",
+            message=f"无法识别该文件类型。\n\n"
+                    f"文件：{p.name}\n"
+                    f"后缀：{p.suffix}\n\n"
+                    f"支持：.docx / .md / .markdown / .txt",
             is_error=True,
             auto_close=10,
         )
         return
 
-    suffix = input_path.suffix.lower()
+    parts = [f"✅ 成功：{ok} 个"]
+    if fail:
+        parts.append(f"❌ 失败：{fail} 个")
+    if not_found:
+        parts.append(f"⚠ 文件不存在：{len(not_found)} 个")
+    if unsupported:
+        names = ", ".join(p.name for p in unsupported[:3])
+        extra = "..." if len(unsupported) > 3 else ""
+        parts.append(f"⊘ 格式不支持：{names}{extra}")
 
-    # ── 判断转换方向 ──
-    if suffix in WORD_EXTENSIONS:
-        _convert_word_to_md(input_path, config, duration)
-    elif suffix in MD_EXTENSIONS:
-        _convert_md_to_word(input_path, config, duration)
-    else:
-        show_notification(
-            title="格式不支持",
-            message=f"无法识别该文件类型。\n\n"
-                    f"当前文件后缀：{suffix}\n"
-                    f"支持的格式：\n"
-                    f"  📄 Word → MD：.docx\n"
-                    f"  📝 MD → Word：.md, .markdown, .txt",
-            is_error=True,
-            auto_close=10,
-        )
+    is_error = fail > 0 or not_found or unsupported
+    show_notification(
+        title="📦 批量转换完成" if not is_error else "📦 批量转换完成（有问题）",
+        message="\n".join(parts),
+        is_error=is_error,
+        auto_close=duration if not is_error else "long",
+    )
 
 
-def _convert_word_to_md(input_path: Path, config: dict, duration: str):
-    """Word → Markdown 转换流程。"""
+def _convert_word_to_md(input_path: Path, config: dict, duration: str,
+                        notify: bool = True) -> bool:
+    """Word → Markdown 转换流程。返回 True=成功, False=失败。"""
     try:
         output_path = input_path.with_suffix(".md")
 
         md_content = docx_to_markdown(str(input_path), config, output_path)
 
-        # Pandoc 路径已直接写入文件；此处覆盖以确保编码一致
         with open(output_path, "w", encoding=config.get("output_encoding", "utf-8")) as f:
             f.write(md_content)
 
-        show_notification(
-            title="✅ 转换成功  Word → Markdown",
-            message=f"源文件：{input_path.name}\n"
-                    f"输出文件：{output_path.name}",
-            output_path=str(output_path),
-            auto_close=duration,
-        )
+        if notify:
+            show_notification(
+                title="✅ 转换成功  Word → Markdown",
+                message=f"源文件：{input_path.name}\n"
+                        f"输出文件：{output_path.name}",
+                output_path=str(output_path),
+                auto_close=duration,
+            )
+        return True
 
     except Exception as e:
-        show_notification(
-            title="转换失败  Word → Markdown",
-            message=f"转换过程中发生错误：\n{str(e)}",
-            is_error=True,
-            auto_close="long",
-        )
+        if notify:
+            show_notification(
+                title="转换失败  Word → Markdown",
+                message=f"转换过程中发生错误：\n{str(e)}",
+                is_error=True,
+                auto_close="long",
+            )
+        return False
 
 
-def _convert_md_to_word(input_path: Path, config: dict, duration: str):
-    """Markdown → Word 转换流程。"""
+def _convert_md_to_word(input_path: Path, config: dict, duration: str,
+                        notify: bool = True) -> bool:
+    """Markdown → Word 转换流程。返回 True=成功, False=失败。"""
     try:
         output_path = input_path.with_suffix(".docx")
 
@@ -113,21 +169,25 @@ def _convert_md_to_word(input_path: Path, config: dict, duration: str):
 
         markdown_to_docx(md_content, str(output_path), config)
 
-        show_notification(
-            title="✅ 转换成功  Markdown → Word",
-            message=f"源文件：{input_path.name}\n"
-                    f"输出文件：{output_path.name}",
-            output_path=str(output_path),
-            auto_close=duration,
-        )
+        if notify:
+            show_notification(
+                title="✅ 转换成功  Markdown → Word",
+                message=f"源文件：{input_path.name}\n"
+                        f"输出文件：{output_path.name}",
+                output_path=str(output_path),
+                auto_close=duration,
+            )
+        return True
 
     except Exception as e:
-        show_notification(
-            title="转换失败  Markdown → Word",
-            message=f"转换过程中发生错误：\n{str(e)}",
-            is_error=True,
-            auto_close="long",
-        )
+        if notify:
+            show_notification(
+                title="转换失败  Markdown → Word",
+                message=f"转换过程中发生错误：\n{str(e)}",
+                is_error=True,
+                auto_close="long",
+            )
+        return False
 
 
 if __name__ == "__main__":
