@@ -1,21 +1,19 @@
 """
 核心转换引擎 — Word (.docx) 与 Markdown (.md) 双向转换。
 
-支持:
-- 大纲/标题层级双向映射 (Heading 1-6 ↔ #-######)
-- 内联格式: 粗体、斜体、下划线、删除线、超链接
-- 有序/无序列表
-- 表格
-- 图片提取与引用
-- 代码块
-- 引用块
-- 中英文标题样式
+Word→MD 流程:
+  1. python-docx 预处理: 读取样式大纲级别 (w:outlineLvl), 强制写入标准
+     "Heading N" 样式名, 保存为临时 .docx
+  2. Pandoc 转换: gfm 格式 + 图片提取 + 不折行
+  3. Pandoc 不可用时回退到 python-docx 原生解析
+
+MD→Word 流程:
+  Pandoc 引擎 (默认) → python-docx 原生引擎 (回退)
 """
 import re
 import os
-import html
+import subprocess
 from pathlib import Path
-from io import BytesIO
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -221,23 +219,24 @@ def _is_ordered_numbering(doc, numId: str) -> bool:
         return False
 
 
-def _get_numbering_type(doc, numId: str) -> str:
-    """判断列表是有序还是无序。"""
-    return "ordered" if _is_ordered_numbering(doc, numId) else "unordered"
-
 
 def _get_cell_text(cell) -> str:
     """获取表格单元格的纯文本内容。"""
     return cell.text.strip().replace("\n", " ").replace("|", "\\|")
 
 
-def docx_to_markdown(docx_path: str | Path, config: dict = None) -> str:
+def docx_to_markdown(docx_path: str | Path, config: dict = None,
+                     output_path: str | Path = None) -> str:
     """
     将 Word 文档转换为 Markdown 文本。
+
+    优先使用 Pandoc 引擎（效果最佳：表格/列表/图片内联位置精确），
+    Pandoc 不可用时回退到 python-docx 原生解析。
 
     Args:
         docx_path: Word 文档路径
         config: 配置字典（可选，默认从 config.json 加载）
+        output_path: 输出 .md 文件路径（Pandoc 路径需要，用于图片路径计算）
 
     Returns:
         Markdown 格式文本
@@ -245,18 +244,154 @@ def docx_to_markdown(docx_path: str | Path, config: dict = None) -> str:
     if config is None:
         config = load_config()
 
+    docx_path = Path(docx_path)
+
+    # ── Pandoc 路径 ──
+    pandoc_exe = _find_pandoc_exe()
+    if pandoc_exe and output_path:
+        try:
+            return _docx_to_md_via_pandoc(docx_path, Path(output_path), config, pandoc_exe)
+        except Exception:
+            pass  # 回退到原生引擎
+
+    # ── 原生 python-docx 引擎（回退） ──
+    return _docx_to_md_native(docx_path, config)
+
+
+def _find_pandoc_exe() -> str | None:
+    """查找 pandoc 可执行文件（复用 pandoc_engine 的查找逻辑）。"""
+    try:
+        from pandoc_engine import _find_pandoc
+        return _find_pandoc()
+    except ImportError:
+        pass
+    import shutil
+    return shutil.which("pandoc")
+
+
+def _docx_to_md_via_pandoc(docx_path: Path, output_path: Path,
+                            config: dict, pandoc_exe: str) -> str:
+    """
+    Pandoc 驱动的 Word→Markdown 转换。
+
+    预处理步骤（python-docx）：
+      读取每个段落的样式大纲级别 (w:outlineLvl)，若有 outlineLvl=0~5，
+      则将段落样式强制改为标准 "Heading N" 名称。
+      这解决了中文 Word 中 "标题 1" 等样式名不被 Pandoc 识别的问题。
+
+    Pandoc 参数：
+      -f docx -t gfm: GitHub Flavored Markdown（表格/列表完美支持）
+      --extract-media: 图片提取到指定目录，markdown 中引用路径自动正确
+      --wrap=none: 防止中文段落被强制换行打断
+    """
+    output_dir = output_path.parent
+    img_folder = config.get("image_folder", "images")
+
+    # ── 1. 预处理：大纲级别 → 标准 Heading 样式 ──
+    doc = Document(str(docx_path))
+    modified = _normalize_heading_styles(doc)
+
+    # 保存临时文件（如有修改）或直接用原文件
+    if modified:
+        temp_docx = output_dir / f"._temp_{docx_path.stem}.docx"
+        doc.save(str(temp_docx))
+    else:
+        temp_docx = docx_path
+
+    try:
+        # ── 2. 调用 Pandoc ──
+        img_dir = output_dir / img_folder
+        args = [
+            pandoc_exe,
+            str(temp_docx),
+            "-f", "docx",
+            "-t", "gfm",
+            "-o", str(output_path),
+            f"--extract-media={img_dir}",
+            "--wrap=none",
+        ]
+
+        result = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            error_msg = result.stderr[:500] if result.stderr else "Unknown Pandoc error"
+            raise RuntimeError(f"Pandoc conversion failed: {error_msg}")
+
+        # ── 3. 读取生成的 Markdown ──
+        with open(output_path, "r", encoding="utf-8") as f:
+            return f.read()
+
+    finally:
+        # 清理临时文件
+        if modified and temp_docx != docx_path and temp_docx.exists():
+            temp_docx.unlink()
+
+
+def _normalize_heading_styles(doc) -> bool:
+    """
+    遍历文档段落，读取样式大纲级别，强制改为标准 "Heading N" 样式名。
+
+    这让 Pandoc 能正确识别中文 Word 中的标题（如 "标题 1"→"Heading 1"）。
+
+    Returns:
+        True 表示有段落被修改，False 表示无需修改。
+    """
+    modified = False
+    # 预检/创建标准 Heading 样式
+    heading_styles = {}
+    for lvl in range(1, 7):
+        name = f"Heading {lvl}"
+        try:
+            heading_styles[lvl] = doc.styles[name]
+        except KeyError:
+            try:
+                heading_styles[lvl] = doc.styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+            except Exception:
+                heading_styles[lvl] = None
+
+    for para in doc.paragraphs:
+        lvl = _auto_detect_heading_level(para)
+        if lvl is None or not (1 <= lvl <= 6):
+            continue
+
+        # 已经是标准 Heading N 样式则跳过
+        if para.style and para.style.name == f"Heading {lvl}":
+            continue
+
+        # 强制设为标准样式
+        target_style = heading_styles.get(lvl)
+        if target_style is not None:
+            try:
+                para.style = target_style
+                modified = True
+            except Exception:
+                pass
+
+    return modified
+
+
+def _docx_to_md_native(docx_path: Path, config: dict) -> str:
+    """
+    原生 python-docx Word→Markdown 转换（Pandoc 不可用时的回退方案）。
+
+    逐个解析段落/表格/图片，拼接 Markdown 字符串。
+    注意：此方案对复杂文档（合并单元格/嵌套列表等）支持有限。
+    """
     doc = Document(str(docx_path))
     extract_imgs = config.get("extract_images", True)
     img_folder = config.get("image_folder", "images")
 
     md_lines = []
-    list_stack = []  # 追踪列表状态
     prev_was_empty = False
 
     # 图片输出目录
     docx_dir = Path(docx_path).parent
     img_out_dir = docx_dir / img_folder
-    img_rel_cache = {}
 
     for para in doc.paragraphs:
         # 1. 检测标题（基于样式的大纲级别）
@@ -299,7 +434,6 @@ def docx_to_markdown(docx_path: str | Path, config: dict = None) -> str:
             if rId and rId in doc.part.rels:
                 rel = doc.part.rels[rId]
                 target = rel.target_ref
-                # 简单处理：在段落末尾添加链接引用
                 line_parts.append(f" (链接: {target})")
 
         line = "".join(line_parts).strip()
@@ -337,7 +471,6 @@ def docx_to_markdown(docx_path: str | Path, config: dict = None) -> str:
                     img_name = f"image_{rel_id}{img_ext}"
                     img_out_dir.mkdir(parents=True, exist_ok=True)
                     dest = img_out_dir / img_name
-                    # 避免覆盖
                     counter = 1
                     while dest.exists():
                         img_name = f"image_{rel_id}_{counter}{img_ext}"

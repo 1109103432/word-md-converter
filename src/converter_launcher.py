@@ -80,8 +80,9 @@ def _convert_word_to_md(input_path: Path, config: dict, duration: str):
     try:
         output_path = input_path.with_suffix(".md")
 
-        md_content = docx_to_markdown(str(input_path), config)
+        md_content = docx_to_markdown(str(input_path), config, output_path)
 
+        # Pandoc 路径已直接写入文件；此处覆盖以确保编码一致
         with open(output_path, "w", encoding=config.get("output_encoding", "utf-8")) as f:
             f.write(md_content)
 
