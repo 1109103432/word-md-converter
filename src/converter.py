@@ -325,7 +325,21 @@ def _docx_to_md_via_pandoc(docx_path: Path, output_path: Path,
 
         # ── 3. 读取生成的 Markdown ──
         with open(output_path, "r", encoding="utf-8") as f:
-            return f.read()
+            md_content = f.read()
+
+        # ── 4. 后处理：HRMARKER 标记 → 水平分割线 ──
+        md_content = re.sub(
+            r'^\s*HRMARKER\s*$',
+            '---',
+            md_content,
+            flags=re.MULTILINE,
+        )
+
+        # 回写处理后的内容
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(md_content)
+
+        return md_content
 
     finally:
         # 清理临时文件
@@ -439,16 +453,17 @@ def _rename_heading_styles(styles_root, nsmap: dict) -> bool:
 
 def _convert_section_breaks_to_rules(doc_root, nsmap: dict) -> bool:
     """
-    将 document.xml 中段落级 <w:sectPr>（分节符）替换为水平线标记。
+    将 document.xml 中段落级 <w:sectPr>（分节符）替换为含 HRMARKER 标记的
+    段落。Pandoc 转换后，由调用方在 markdown 输出中把 HRMARKER 替换为 ---。
 
-    OOXML 中分节符出现为 w:p/w:pPr/w:sectPr，Pandoc 可能将其误解析为
-    标题。此处移除 w:sectPr 并给段落添加底部边框，Pandoc 会将带底部
-    边框的空段落识别为水平分割线（markdown 中即 ---）。
+    不修補旧段落（会残留 pStyle/outlineLvl 导致 Pandoc 继续误判），
+    而是创建全新的干净段落。
 
     w:body/w:sectPr 是最后一节的属性，不是分节符，不处理。
 
     返回 True 表示至少有一个分节符被转换。
     """
+    HR_MARKER = "HRMARKER"
     modified = False
 
     for para in doc_root.findall(".//w:p", nsmap):
@@ -459,24 +474,22 @@ def _convert_section_breaks_to_rules(doc_root, nsmap: dict) -> bool:
         if sectPr is None:
             continue
 
-        # 这是段落级分节符
-        # 1. 移除 w:sectPr
-        pPr.remove(sectPr)
+        # 获取父节点和位置，用于替换
+        parent = para.getparent()
+        if parent is None:
+            continue
+        children = list(parent)
+        idx = children.index(para)
 
-        # 2. 清空段落文本（分节符段落通常是空的）
-        for r in para.findall("w:r", nsmap):
-            para.remove(r)
+        # 创建全新干净段落：只含一个带标记文本的 run
+        new_para = etree.Element(_w("p"))
+        new_r = etree.SubElement(new_para, _w("r"))
+        new_t = etree.SubElement(new_r, _w("t"))
+        new_t.text = HR_MARKER
+        # 标记空格保留（xml:space="preserve" 对无空格文本不是必须的，但无害）
 
-        # 3. 添加底部边框（Pandoc 据此识别水平分割线）
-        pBdr = pPr.find("w:pBdr", nsmap)
-        if pBdr is None:
-            pBdr = etree.SubElement(pPr, _w("pBdr"))
-        bottom = etree.SubElement(pBdr, _w("bottom"))
-        bottom.set(_w("val"), "single")
-        bottom.set(_w("sz"), "12")
-        bottom.set(_w("space"), "1")
-        bottom.set(_w("color"), "auto")
-
+        # 替换旧段落
+        parent[idx] = new_para
         modified = True
 
     return modified
