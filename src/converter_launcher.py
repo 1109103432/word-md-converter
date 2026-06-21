@@ -33,15 +33,7 @@ def main():
     duration = notif.get("duration", "short")
 
     if len(sys.argv) < 2:
-        show_notification(
-            title="Word ↔ Markdown 转换工具",
-            message="请将文件拖放到此图标上即可自动转换。\n\n"
-                    "📄  拖入 .docx → 自动转为 .md\n"
-                    "📝  拖入 .md   → 自动转为 .docx\n\n"
-                    "📦  支持同时拖入多个文件\n"
-                    "输出位置：原文件所在目录",
-            auto_close=8,
-        )
+        _convert_clipboard_to_docx(config, duration)
         return
 
     # ── 收集并分类所有输入文件 ──
@@ -188,6 +180,100 @@ def _convert_md_to_word(input_path: Path, config: dict, duration: str,
                 auto_close="long",
             )
         return False
+
+
+def _convert_clipboard_to_docx(config: dict, duration: str):
+    """双击图标时：读取剪贴板内容 → 识别为 Markdown → 输出 Word 文档。
+
+    输出位置：exe 所在目录（打包模式）或项目根目录（开发模式）。
+    文件名根据剪贴板首行标题自动生成，无标题时用时间戳。
+    """
+    import tkinter as tk
+    from datetime import datetime
+
+    # ── 1. 读取剪贴板 ──
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        md_content = root.clipboard_get()
+        root.destroy()
+    except tk.TclError:
+        # 剪贴板无文本内容
+        show_notification(
+            title="Word ↔ Markdown 转换工具",
+            message="📋 剪贴板内无文本内容。\n\n"
+                    "💡 双击图标 = 剪贴板 → Word\n"
+                    "💡 拖入文件 = 自动识别转换\n\n"
+                    "📄  拖入 .docx → .md\n"
+                    "📝  拖入 .md → .docx",
+            auto_close=8,
+        )
+        return
+    except Exception as e:
+        show_notification(
+            title="剪贴板读取失败",
+            message=f"无法读取剪贴板：\n{str(e)}",
+            is_error=True,
+            auto_close="long",
+        )
+        return
+
+    if not md_content or not md_content.strip():
+        show_notification(
+            title="Word ↔ Markdown 转换工具",
+            message="📋 剪贴板为空。\n\n"
+                    "💡 双击图标 = 剪贴板 → Word\n"
+                    "💡 拖入文件 = 自动识别转换",
+            auto_close=8,
+        )
+        return
+
+    # ── 2. 确定输出目录（图标同目录）──
+    if getattr(sys, 'frozen', False):
+        output_dir = Path(sys.executable).parent
+    else:
+        output_dir = Path(__file__).resolve().parent.parent
+
+    # ── 3. 生成文件名（优先用 md 首行标题）──
+    first_line = md_content.strip().split("\n")[0].strip()
+    title = first_line.lstrip("#").strip()
+    if title and len(title) <= 80:
+        # 去除文件名非法字符
+        safe_title = "".join(c for c in title if c not in r'\/:*?"<>|')
+        safe_title = safe_title.strip()
+        if safe_title:
+            filename = f"{safe_title}.docx"
+        else:
+            filename = f"剪贴板_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+    else:
+        filename = f"剪贴板_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
+
+    output_path = output_dir / filename
+
+    # ── 4. 避免覆盖已有文件 ──
+    if output_path.exists():
+        stem = output_path.stem
+        ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_path = output_dir / f"{stem}_{ts}.docx"
+
+    # ── 5. 转换 ──
+    try:
+        markdown_to_docx(md_content, str(output_path), config)
+        show_notification(
+            title="✅ 剪贴板 → Word 转换成功",
+            message=f"📋 剪贴板内容已转为 Word 文档\n\n"
+                    f"📄 {output_path.name}\n\n"
+                    f"📁 {output_dir}",
+            output_path=str(output_path),
+            auto_close=duration,
+        )
+    except Exception as e:
+        show_notification(
+            title="剪贴板转换失败",
+            message=f"转换过程中发生错误：\n{str(e)}",
+            is_error=True,
+            auto_close="long",
+        )
 
 
 if __name__ == "__main__":
