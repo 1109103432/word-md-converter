@@ -1,24 +1,92 @@
 """
 Windows 系统通知模块 — 使用 win11toast (WinRT 原生 API)。
 
-win11toast 在进程内直接调用 Windows Runtime ToastNotification API，
-不依赖子进程。默认使用 'Python' 作为 AppUserModelID（Python 安装时
-已注册，无需额外配置），兼容 pythonw.exe 后台运行。
+通过自定义 AppUserModelID + 开始菜单快捷方式，支持：
+- 点击通知打开输出文件所在文件夹
+- 多种通知停留时长（短/中/长/持续/紧急）
 
 流程：
-  notify() → WinRT Show() → sleep(0.5s) → 主进程退出
-                                    ↑
-                          Windows 通知系统已拾取 Toast
+  notify() → WinRT Show() → sleep(0.5s) → 退出
 """
-import sys
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 from win11toast import notify as _win11_notify
 
-# 使用 Python 默认 AppUserModelID，无需开始菜单快捷方式
-_APP_ID = "Python"
+_APP_ID = "WordMD.Converter"
+
+
+def _ensure_start_menu_shortcut():
+    """
+    确保开始菜单中存在应用快捷方式。
+
+    Windows 要求：带交互操作（如点击打开文件）的 Toast 通知
+    必须在开始菜单中有对应 AppUserModelID 的快捷方式。
+    """
+    shortcut_dir = (
+        Path(os.environ["APPDATA"])
+        / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+    )
+    shortcut_dir.mkdir(parents=True, exist_ok=True)
+    shortcut_path = shortcut_dir / f"{_APP_ID}.lnk"
+
+    if shortcut_path.exists():
+        return
+
+    if getattr(sys, 'frozen', False):
+        target = sys.executable
+        working_dir = str(Path(sys.executable).parent)
+    else:
+        # 开发模式：用 pythonw.exe 避免控制台
+        target = str(Path(sys.executable).parent / "pythonw.exe")
+        working_dir = str(Path(__file__).resolve().parent.parent)
+
+    ps = (
+        f"$ws = New-Object -ComObject WScript.Shell; "
+        f"$sc = $ws.CreateShortcut('{shortcut_path}'); "
+        f"$sc.TargetPath = '{target}'; "
+        f"$sc.WorkingDirectory = '{working_dir}'; "
+        f"$sc.Save(); "
+    )
+    try:
+        subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+             "-Command", ps],
+            capture_output=True, timeout=10,
+            creationflags=0x08000000,
+        )
+    except Exception:
+        pass  # 静默失败，通知仍可显示（仅点击操作不可用）
+
+
+# ── 模块加载时注册 ──
+_ensure_start_menu_shortcut()
+
+
+# ── 时长映射：用户配置 → Toast 参数 ──
+_DURATION_MAP = {
+    # 短 (系统 ~7s)
+    "5秒":   {"duration": "short", "scenario": "default"},
+    "short": {"duration": "short", "scenario": "default"},
+    "5":     {"duration": "short", "scenario": "default"},
+    # 中 (~12s, 用 long+default)
+    "10秒":  {"duration": "long",  "scenario": "default"},
+    "medium": {"duration": "long",  "scenario": "default"},
+    "10":    {"duration": "long",  "scenario": "default"},
+    # 长 (~25s)
+    "25秒":  {"duration": "long",  "scenario": "default"},
+    "long":  {"duration": "long",  "scenario": "default"},
+    "25":    {"duration": "long",  "scenario": "default"},
+    # 持续显示（手动关闭才消失）
+    "持续":   {"duration": "long",  "scenario": "reminder"},
+    "keep":   {"duration": "long",  "scenario": "reminder"},
+    # 紧急（持续 + 循环提醒音）
+    "紧急":   {"duration": "long",  "scenario": "alarm"},
+    "alarm":  {"duration": "long",  "scenario": "alarm"},
+}
 
 
 def show_notification(
@@ -34,8 +102,13 @@ def show_notification(
     Args:
         title: 通知标题
         message: 通知正文
-        output_path: （暂未使用 — 系统限制：自定义 AppID 需要额外注册）
-        auto_close: "5秒" 或 "25秒"
+        output_path: 输出文件路径（点击通知打开所在文件夹）
+        auto_close: 停留时长 —
+            "5秒"/"short"  → 短 (~7s)
+            "10秒"/"medium" → 中 (~12s)
+            "25秒"/"long"   → 长 (~25s)
+            "持续"/"keep"   → 持续显示（手动关闭）
+            "紧急"/"alarm"  → 持续 + 循环提醒音
         is_error: 是否为错误通知
     """
     # ── 通知开关 ──
@@ -49,8 +122,17 @@ def show_notification(
     except Exception:
         pass
 
-    # ── 时长 ──
-    duration = "short" if str(auto_close) in ("5秒", "short", "5") else "long"
+    # ── 时长解析 ──
+    key = str(auto_close)
+    params = _DURATION_MAP.get(key, _DURATION_MAP["5秒"])
+
+    # ── 点击操作：打开文件夹 ──
+    on_click = None
+    if output_path:
+        folder = str(Path(output_path).resolve().parent)
+        # win11toast: 字符串参数 → 设为 toast 的 launch 属性
+        # 文件夹路径 → Windows 自动用资源管理器打开
+        on_click = folder
 
     # ── 音频 ──
     audio = None
@@ -63,10 +145,11 @@ def show_notification(
             app_id=_APP_ID,
             title=title,
             body=message,
-            duration=duration,
+            duration=params["duration"],
+            scenario=params["scenario"],
+            on_click=on_click,
             audio=audio,
         )
-        # WinRT Show() 是异步的 — 短暂等待确保 Windows 拾取通知
         time.sleep(0.5)
     except Exception:
-        pass  # 通知静默失败，不阻断主流程
+        pass

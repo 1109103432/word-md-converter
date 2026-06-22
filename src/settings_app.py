@@ -393,12 +393,10 @@ class SettingsApp:
         ttk.Label(dur_row, text="显示时长：").pack(side=tk.LEFT)
 
         old_dur = self.config.get("notification", {}).get("duration", "5秒")
-        if old_dur in ("short", "long"):
-            old_dur = "5秒" if old_dur == "short" else "25秒"
         self.duration_var = tk.StringVar(value=old_dur)
         ttk.Combobox(
             dur_row, textvariable=self.duration_var,
-            values=["5秒", "25秒"],
+            values=["5秒", "10秒", "25秒", "持续", "紧急"],
             state="readonly",
             width=8,
         ).pack(side=tk.LEFT, padx=8)
@@ -524,7 +522,7 @@ class SettingsApp:
             "  · 内容提取 → 全部开启\n"
             "  · 图片提取 → 开启\n"
             "  · 输出格式 → UTF-8，添加 TOC\n"
-            "  · 通知 → 全部开启，5秒",
+            "  · 通知 → 全部开启，25秒",
         ):
             from config import _DEFAULT_CONFIG
             _DEFAULT_CONFIG["notification"]["duration"] = "5秒"

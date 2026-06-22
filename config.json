@@ -21,6 +21,7 @@
     "enabled": true,
     "show_success": true,
     "duration": "5秒",
+    "_duration_options": "5秒, 10秒, 25秒, 持续, 紧急",
     "show_output_path": true
   }
 }
