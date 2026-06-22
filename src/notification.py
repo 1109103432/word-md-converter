@@ -126,13 +126,11 @@ def show_notification(
     key = str(auto_close)
     params = _DURATION_MAP.get(key, _DURATION_MAP["5秒"])
 
-    # ── 点击操作：打开文件夹 ──
+    # ── 点击操作：打开输出文件 ──
     on_click = None
     if output_path:
-        folder = str(Path(output_path).resolve().parent)
-        # win11toast: 字符串参数 → 设为 toast 的 launch 属性
-        # 文件夹路径 → Windows 自动用资源管理器打开
-        on_click = folder
+        # 传入文件路径，Windows 用默认程序打开
+        on_click = str(Path(output_path).resolve())
 
     # ── 音频 ──
     audio = None
