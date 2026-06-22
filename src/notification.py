@@ -14,6 +14,7 @@ import ctypes
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 _APP_ID = "WordMD.Converter"
@@ -172,6 +173,9 @@ def _show_toast(
         toast.add_actions(label="📁 打开文件夹", launch=folder)
 
     toast.show()
+    # pythonw.exe 无消息泵，进程退出过快会导致通知被丢弃。
+    # 短暂休眠给 Windows 通知系统足够时间去拾取并显示 Toast。
+    time.sleep(0.5)
 
 
 def _show_tk_fallback(
