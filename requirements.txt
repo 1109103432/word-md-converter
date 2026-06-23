@@ -1,3 +1,5 @@
 python-docx>=1.0.0
 markdown>=3.4.0
-winotify>=1.1.0
+win11toast>=1.0.0
+lxml>=5.0.0
+pyinstaller>=6.0.0
