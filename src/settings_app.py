@@ -543,10 +543,21 @@ class SettingsApp:
 
 def main():
     root = tk.Tk()
-    root.withdraw()          # 隐藏窗口
-    root.update()            # 立即处理隐藏命令，避免 Setup 期间窗口可见
+    # 立即设置窗口属性（在首次渲染前），避免默认位置→居中跳变
+    root.title("Word ↔ Markdown 转换设置")
+    root.geometry("640x540")
+    root.minsize(520, 420)
+    root.resizable(True, True)
+    root.update_idletasks()
+    w = root.winfo_reqwidth()
+    h = root.winfo_reqheight()
+    sw = root.winfo_screenwidth()
+    sh = root.winfo_screenheight()
+    x = (sw - w) // 2
+    y = (sh - h) // 2
+    root.geometry(f"+{x}+{y}")
+    # 窗口已正确居中，构建内容（用户即时看到窗口出现）
     SettingsApp(root)
-    root.deiconify()         # 配置完成后显示
     root.mainloop()
 
 
