@@ -531,19 +531,21 @@ class SettingsApp:
             save_config(_DEFAULT_CONFIG)
             self.root.destroy()
             new_root = tk.Tk()
-            new_root.attributes('-alpha', 0.0)
+            new_root.withdraw()
+            new_root.update_idletasks()
             SettingsApp(new_root)
             new_root.update_idletasks()
-            new_root.attributes('-alpha', 1.0)
+            new_root.deiconify()
             new_root.mainloop()
 
 
 def main():
     root = tk.Tk()
-    root.attributes('-alpha', 0.0)   # 完全透明，构建期间不可见
-    SettingsApp(root)                # 渐进渲染（快）
-    root.update_idletasks()          # 完成最终布局
-    root.attributes('-alpha', 1.0)   # 一次性显示
+    root.withdraw()                 # 隐藏窗口
+    root.update_idletasks()         # 立即处理隐藏（仅空闲任务，轻量）
+    SettingsApp(root)               # 构建界面（窗口隐藏中）
+    root.update_idletasks()         # 完成布局计算
+    root.deiconify()                # 显示完整界面
     root.mainloop()
 
 
