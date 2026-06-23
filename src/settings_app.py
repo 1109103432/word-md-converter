@@ -535,6 +535,7 @@ class SettingsApp:
             self.root.destroy()
             new_root = tk.Tk()
             new_root.withdraw()
+            new_root.update()    # 立即处理隐藏命令
             SettingsApp(new_root)
             new_root.deiconify()
             new_root.mainloop()
@@ -542,7 +543,8 @@ class SettingsApp:
 
 def main():
     root = tk.Tk()
-    root.withdraw()          # 配置期间隐藏，避免闪烁
+    root.withdraw()          # 隐藏窗口
+    root.update()            # 立即处理隐藏命令，避免 Setup 期间窗口可见
     SettingsApp(root)
     root.deiconify()         # 配置完成后显示
     root.mainloop()
