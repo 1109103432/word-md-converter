@@ -27,9 +27,16 @@ class SettingsApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Word ↔ Markdown 转换设置")
-        self.root.geometry("640x540")
         self.root.resizable(True, True)
         self.root.minsize(520, 420)
+
+        # 立即居中（使用已知的目标尺寸，无需 update_idletasks）
+        # 避免 update_idletasks 强制渲染空窗口导致白屏
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        x = (sw - 640) // 2
+        y = (sh - 540) // 2
+        self.root.geometry(f"640x540+{x}+{y}")
 
         try:
             self.root.iconbitmap(default="")
@@ -39,16 +46,6 @@ class SettingsApp:
         self.config = load_config()
         self._setup_styles()
         self._build_ui()
-
-        # 居中显示
-        self.root.update_idletasks()
-        w = self.root.winfo_width()
-        h = self.root.winfo_height()
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        x = (sw - w) // 2
-        y = (sh - h) // 2
-        self.root.geometry(f"+{x}+{y}")
 
     # ── 样式 ──────────────────────────────────────────────
 
@@ -534,29 +531,12 @@ class SettingsApp:
             save_config(_DEFAULT_CONFIG)
             self.root.destroy()
             new_root = tk.Tk()
-            new_root.withdraw()
-            new_root.update()    # 立即处理隐藏命令
             SettingsApp(new_root)
-            new_root.deiconify()
             new_root.mainloop()
 
 
 def main():
     root = tk.Tk()
-    # 立即设置窗口属性（在首次渲染前），避免默认位置→居中跳变
-    root.title("Word ↔ Markdown 转换设置")
-    root.geometry("640x540")
-    root.minsize(520, 420)
-    root.resizable(True, True)
-    root.update_idletasks()
-    w = root.winfo_reqwidth()
-    h = root.winfo_reqheight()
-    sw = root.winfo_screenwidth()
-    sh = root.winfo_screenheight()
-    x = (sw - w) // 2
-    y = (sh - h) // 2
-    root.geometry(f"+{x}+{y}")
-    # 窗口已正确居中，构建内容（用户即时看到窗口出现）
     SettingsApp(root)
     root.mainloop()
 
