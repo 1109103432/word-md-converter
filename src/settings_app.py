@@ -3,233 +3,749 @@
 可作为独立应用运行，或通过桌面"设置"图标启动。
 
 标签页结构:
-  1. MD→Word   — Pandoc 状态、样式模板、标题映射
+  1. MD→Word   — Pandoc 状态、样式模板选择
   2. Word→MD   — 大纲级别识别、内容提取、图片、输出格式
   3. 其他设置   — 通知开关、时长、预览
 
-支持 PyInstaller 打包和直接源码运行两种模式。
+技术栈: PySide6 (Qt for Python)，彻底解决 tkinter 窗口闪烁问题。
 """
 import sys
-import tkinter as tk
-from tkinter import ttk, messagebox
+import os
 from pathlib import Path
+
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QWidget,
+    QTabWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QGroupBox,
+    QLabel,
+    QPushButton,
+    QCheckBox,
+    QComboBox,
+    QLineEdit,
+    QButtonGroup,
+    QMessageBox,
+    QFrame,
+    QSizePolicy,
+)
+from PySide6.QtCore import Qt, QPoint
+from PySide6.QtGui import QFont, QIcon, QPainter, QPixmap, QPen, QColor
 
 # 源码运行时确保能找到同目录下的模块
 if not getattr(sys, 'frozen', False):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from config import load_config, save_config, get_config_path
+from config import load_config, save_config, get_config_path, get_project_root
+from pandoc_engine import has_pandoc, get_pandoc_version, get_builtin_template_path, \
+    create_builtin_backup, restore_builtin_from_backup
 
 
-class SettingsApp:
-    """转换参数设置主窗口。"""
+# ═══════════════════════════════════════════════════════════
+#  常量
+# ═══════════════════════════════════════════════════════════
 
-    def __init__(self, root: tk.Tk):
-        self.root = root
-        self.root.title("Word ↔ Markdown 转换设置")
-        self.root.geometry("640x540")
-        self.root.resizable(True, True)
-        self.root.minsize(520, 420)
+# 窗口
+WINDOW_WIDTH = 760
+WINDOW_HEIGHT = 650
+WINDOW_MIN_WIDTH = 620
+WINDOW_MIN_HEIGHT = 520
 
+# 配色 (Flat Design Professional)
+COLOR_PRIMARY = "#2563EB"
+COLOR_PRIMARY_DARK = "#1D4ED8"
+COLOR_PRIMARY_LIGHT = "#DBEAFE"
+COLOR_SUCCESS = "#10B981"
+COLOR_WARNING = "#F59E0B"
+COLOR_ERROR = "#EF4444"
+COLOR_BG_WHITE = "#FFFFFF"
+COLOR_BG_SURFACE = "#F8FAFC"
+COLOR_BORDER = "#E2E8F0"
+COLOR_TEXT_PRIMARY = "#1E293B"
+COLOR_TEXT_SECONDARY = "#64748B"
+COLOR_TEXT_MUTED = "#94A3B8"
+
+
+# ═══════════════════════════════════════════════════════════
+#  辅助函数
+# ═══════════════════════════════════════════════════════════
+
+def _get_templates_dir() -> Path:
+    """返回模板文件夹路径，不存在则自动创建。"""
+    root = get_project_root()
+    templates_dir = root / "模板"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    return templates_dir
+
+
+def _scan_templates() -> list[str]:
+    """
+    扫描 模板/ 目录，返回自定义模板文件名列表（不含内置模板）。
+    内置模板（内置模板.docx）始终排除在外，由内置模板独立管理。
+    按文件名排序。
+    """
+    templates_dir = _get_templates_dir()
+    builtin_path = get_builtin_template_path()
+
+    custom = []
+    for f in sorted(templates_dir.glob("*.docx"), key=lambda p: p.name.lower()):
+        # 排除内置模板（如果在 模板 目录下有同名文件也排除）
+        if builtin_path and f.resolve() == builtin_path.resolve():
+            continue
+        # 也排除名为 内置模板.docx 的文件（保护内置模板不受影响）
+        if f.name.lower() == "内置模板.docx":
+            continue
+        custom.append(f.name)
+    return custom
+
+
+def _builtin_template_exists() -> bool:
+    """内置模板是否存在。"""
+    return get_builtin_template_path() is not None
+
+
+def _parse_template_config(value: str) -> tuple[str, str | None]:
+    """
+    解析 config 中的 pandoc_reference_doc 值。
+    Returns:
+        (mode, filename)
+        mode: "built-in" | "custom" | "missing"
+        filename: 自定义模板的文件名（仅 custom 模式）
+    """
+    if not value or value == "built-in":
+        return ("built-in", None)
+
+    if value.startswith("custom:"):
+        filename = value[len("custom:"):]
+        # 验证文件是否存在
+        template_path = _get_templates_dir() / filename
+        if template_path.is_file():
+            return ("custom", filename)
+        else:
+            return ("missing", filename)
+
+    # 兼容旧格式：直接路径
+    path = Path(value)
+    if path.is_file():
+        return ("custom", path.name)
+
+    return ("missing", None)
+
+
+# ═══════════════════════════════════════════════════════════
+#  样式表
+# ═══════════════════════════════════════════════════════════
+
+STYLESHEET = """
+/* ── 全局 ── */
+QMainWindow {
+    background-color: #FFFFFF;
+}
+QWidget {
+    font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+    font-size: 14px;
+    color: #1E293B;
+}
+
+/* ── 标签页 ── */
+QTabWidget::pane {
+    border: 1px solid #E2E8F0;
+    background-color: #FFFFFF;
+    border-radius: 4px;
+    top: -1px;
+}
+QTabBar::tab {
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    padding: 11px 22px;
+    margin-right: 2px;
+    border-radius: 4px 4px 0 0;
+    color: #64748B;
+    font-size: 14px;
+}
+QTabBar::tab:selected {
+    background: #FFFFFF;
+    color: #2563EB;
+    border-bottom: 2px solid #2563EB;
+    font-weight: 600;
+}
+QTabBar::tab:hover:!selected {
+    color: #1E293B;
+    background: #F1F5F9;
+}
+
+/* ── 分组框 ── */
+QGroupBox {
+    font-weight: 600;
+    border: 1px solid #E2E8F0;
+    border-radius: 6px;
+    margin-top: 8px;
+    padding-top: 20px;
+    background-color: #FFFFFF;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    padding: 0 8px;
+    color: #1E293B;
+}
+
+/* ── 按钮 ── */
+QPushButton {
+    border: 1px solid #E2E8F0;
+    border-radius: 5px;
+    padding: 9px 18px;
+    background-color: #FFFFFF;
+    color: #1E293B;
+    font-size: 14px;
+}
+QPushButton:hover {
+    background-color: #F1F5F9;
+    border-color: #CBD5E1;
+}
+QPushButton:pressed {
+    background-color: #E2E8F0;
+}
+QPushButton#saveBtn {
+    background-color: #2563EB;
+    color: #FFFFFF;
+    border: none;
+    padding: 9px 26px;
+    font-weight: 600;
+}
+QPushButton#saveBtn:hover {
+    background-color: #1D4ED8;
+}
+QPushButton#saveBtn:pressed {
+    background-color: #1E40AF;
+}
+QPushButton#resetBtn {
+    border: none;
+    color: #64748B;
+    background: transparent;
+    padding: 9px 18px;
+}
+QPushButton#resetBtn:hover {
+    color: #EF4444;
+    background: transparent;
+}
+
+/* ── 输入框 ── */
+/*
+ * 注意：QSS 的 vertical padding 会与 Fusion 风格的内部 content-area
+ * 计算冲突，导致文字区域被挤扁 → 文字裁切。
+ * 这里只用水平 padding 给文字呼吸空间，垂直方向通过 min-height
+ * 交给 Fusion 风格处理，避免冲突。
+ */
+QLineEdit {
+    border: 1px solid #E2E8F0;
+    border-radius: 4px;
+    padding: 0 10px;
+    background: #FFFFFF;
+    font-size: 14px;
+    min-height: 30px;
+}
+QLineEdit:focus {
+    border-color: #2563EB;
+}
+
+/* ── 下拉框 ── */
+QComboBox {
+    border: 1px solid #E2E8F0;
+    border-radius: 4px;
+    padding: 0 10px;
+    background: #FFFFFF;
+    min-width: 100px;
+    font-size: 14px;
+    min-height: 30px;
+}
+QComboBox:hover {
+    border-color: #CBD5E1;
+}
+QComboBox:focus {
+    border-color: #2563EB;
+}
+QComboBox::drop-down {
+    border: none;
+    width: 26px;
+}
+QComboBox QAbstractItemView {
+    border: 1px solid #E2E8F0;
+    background: #FFFFFF;
+    selection-background-color: #DBEAFE;
+    selection-color: #1E293B;
+    padding: 6px;
+}
+
+/* ── 复选框（统一方框 ☑️ 样式）── */
+QCheckBox {
+    spacing: 10px;
+    padding: 6px 0;
+}
+QCheckBox::indicator {
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+}
+QCheckBox::indicator:unchecked {
+    border: 2px solid #CBD5E1;
+    background: #FFFFFF;
+}
+QCheckBox::indicator:checked {
+    border: 2px solid #2563EB;
+    background: #2563EB;
+    border-radius: 4px;
+    image: url(CHECKMARK_PLACEHOLDER);
+}
+
+/* ── 分隔线 ── */
+QFrame#separator {
+    background-color: #E2E8F0;
+    max-height: 1px;
+    min-height: 1px;
+}
+
+/* ── 滚动区域 ── */
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+
+/* ── 提示/说明文字 ── */
+QLabel#descLabel {
+    color: #64748B;
+    font-size: 13px;
+}
+QLabel#successLabel {
+    color: #10B981;
+    font-weight: 600;
+}
+QLabel#warningLabel {
+    color: #F59E0B;
+    font-weight: 600;
+}
+QLabel#sectionTitle {
+    font-size: 15px;
+    font-weight: 600;
+    color: #1E293B;
+}
+QLabel#codeLabel {
+    font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
+    font-size: 13px;
+    color: #64748B;
+}
+"""
+
+
+# ═══════════════════════════════════════════════════════════
+#  勾选图标 — 用 QPainter 绘制 ✔ 保存为 PNG，QSS 中引用
+# ═══════════════════════════════════════════════════════════
+
+def _ensure_checkmark_icon() -> Path:
+    """生成 checkmark 图标，返回文件路径。只生成一次，后续直接复用。"""
+    icon_path = get_project_root() / "checkmark.png"
+    if icon_path.exists():
+        return icon_path
+
+    # 4x 分辨率绘制 → 缩放到 20px 指示器时边缘锐利无模糊
+    size = 80
+    pixmap = QPixmap(size, size)
+    pixmap.fill(QColor(0, 0, 0, 0))
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing)
+
+    # ✔ 折线 (相对于 80×80，等比缩放)
+    pen = QPen(QColor("#FFFFFF"), 7.0, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+    painter.setPen(pen)
+    painter.drawPolyline([
+        QPoint(14, 46),
+        QPoint(32, 62),
+        QPoint(66, 18),
+    ])
+
+    painter.end()
+    pixmap.save(str(icon_path), "PNG")
+    return icon_path
+
+
+# ═══════════════════════════════════════════════════════════
+#  主窗口
+# ═══════════════════════════════════════════════════════════
+
+class SettingsWindow(QMainWindow):
+    """转换参数设置主窗口 (PySide6)。"""
+
+    def __init__(self):
+        super().__init__()
+
+        # ── 加载配置 ──
+        self.config = load_config()
+
+        # ── 模板扫描 ──
+        self._custom_templates: list[str] = _scan_templates()
+        self._builtin_available = _builtin_template_exists()
+
+        # ── 修改追踪 ──
+        self._dirty = False
+
+        # ── 配置窗口 ──
+        self._setup_window()
+        self._build_ui()
+        self._load_config_values()
+        self._setup_dirty_tracking()
+        self._center_on_screen()
+
+    # ── 窗口设置 ──────────────────────────────────────────
+
+    def _setup_window(self):
+        """配置窗口属性。"""
+        self.setWindowTitle("Word ↔ Markdown 转换设置")
+        self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
+        self.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+
+        # 窗口图标（尝试加载）
         try:
-            self.root.iconbitmap(default="")
+            icon_path = get_project_root() / "icons" / "settings.ico"
+            if icon_path.exists():
+                self.setWindowIcon(QIcon(str(icon_path)))
         except Exception:
             pass
 
-        self.config = load_config()
-        self._setup_styles()
-        self._build_ui()
+    def _center_on_screen(self):
+        """将窗口居中于屏幕。"""
+        screen = QApplication.primaryScreen()
+        if screen:
+            center = screen.availableGeometry().center()
+            geo = self.frameGeometry()
+            geo.moveCenter(center)
+            self.move(geo.topLeft())
 
-        # 居中显示
-        self.root.update_idletasks()
-        w = self.root.winfo_width()
-        h = self.root.winfo_height()
-        sw = self.root.winfo_screenwidth()
-        sh = self.root.winfo_screenheight()
-        x = (sw - w) // 2
-        y = (sh - h) // 2
-        self.root.geometry(f"+{x}+{y}")
+    # ── 关闭拦截 ──────────────────────────────────────────
 
-    # ── 样式 ──────────────────────────────────────────────
+    def closeEvent(self, event):
+        """关闭窗口前检查是否有未保存的修改。"""
+        if self._dirty:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("未保存的修改")
+            msg.setText("设置已修改，是否保存？")
+            msg.setIcon(QMessageBox.Question)
+            save_btn = msg.addButton("保存", QMessageBox.AcceptRole)
+            discard_btn = msg.addButton("不保存", QMessageBox.DestructiveRole)
+            cancel_btn = msg.addButton("取消", QMessageBox.RejectRole)
+            msg.setDefaultButton(save_btn)
+            msg.exec()
 
-    def _setup_styles(self):
-        style = ttk.Style()
-        # 使用 Windows 原生主题，勾选框显示 ✔ 而非 ❌
-        try:
-            style.theme_use("vista")
-        except Exception:
-            try:
-                style.theme_use("winnative")
-            except Exception:
-                style.theme_use("default")
+            clicked = msg.clickedButton()
+            if clicked == save_btn:
+                self._save_settings()
+                event.accept()
+            elif clicked == discard_btn:
+                event.accept()
+            else:  # cancel_btn or closed via X
+                event.ignore()
+        else:
+            event.accept()
 
-        style.configure("Title.TLabel", font=("Microsoft YaHei", 14, "bold"))
-        style.configure("Section.TLabel", font=("Microsoft YaHei", 11, "bold"))
-        style.configure("Desc.TLabel", font=("Microsoft YaHei", 9), foreground="#666")
-        style.configure("Mono.TLabel", font=("Consolas", 10))
-        style.configure("Save.TButton", font=("Microsoft YaHei", 10, "bold"), padding=8)
-        style.configure("Future.TLabel", font=("Microsoft YaHei", 9),
-                        foreground="#aaa", padding=(0, 8))
+    def _mark_dirty(self):
+        """标记配置已被修改。"""
+        self._dirty = True
+
+    def _setup_dirty_tracking(self):
+        """为所有可修改的控件绑定变更信号，实现未保存提醒。"""
+        # QCheckBox — toggled
+        checkboxes = [
+            self.builtin_check,
+            self.preserve_tables_cb,
+            self.preserve_lists_cb,
+            self.preserve_links_cb,
+            self.extract_images_cb,
+            self.add_toc_cb,
+            self.notif_enabled_cb,
+            self.show_success_cb,
+            self.show_path_cb,
+        ]
+        for cb in checkboxes:
+            cb.toggled.connect(self._mark_dirty)
+        for cb in self.custom_checks:
+            cb.toggled.connect(self._mark_dirty)
+
+        # QLineEdit — textChanged
+        self.image_folder_input.textChanged.connect(self._mark_dirty)
+
+        # QComboBox — currentIndexChanged
+        self.encoding_combo.currentIndexChanged.connect(self._mark_dirty)
+        self.duration_combo.currentIndexChanged.connect(self._mark_dirty)
+
+    # ── 文字控件辅助 ──────────────────────────────────────
+
+    @staticmethod
+    def _make_label(
+        text: str = "",
+        *,
+        word_wrap: bool = False,
+        object_name: str = "",
+        bold: bool = False,
+        font_size: int = 0,
+        font_family: str = "",
+        min_width: int = 0,
+    ) -> QLabel:
+        """
+        统一创建 QLabel，自动设置 Preferred 尺寸策略防止文字被压缩裁切。
+
+        规则:
+          - 所有 label 默认 QSizePolicy.Preferred（垂直方向不压缩）
+          - word_wrap=True 时水平方向也设为 Preferred
+          - 后续文字不会因 layout 空间不足而被切掉
+        """
+        label = QLabel(text)
+        label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+        if word_wrap:
+            label.setWordWrap(True)
+
+        if object_name:
+            label.setObjectName(object_name)
+
+        if bold or font_size or font_family:
+            font = label.font()
+            if bold:
+                font.setBold(True)
+            if font_size:
+                font.setPointSize(font_size)
+            if font_family:
+                font.setFamily(font_family)
+            label.setFont(font)
+
+        if min_width:
+            label.setMinimumWidth(min_width)
+
+        return label
+
+    @staticmethod
+    def _protect_text_widget(widget):
+        """
+        为输入控件设置正确的尺寸策略，防止 layout 压缩导致文字裁切。
+
+        规则:
+          - QLineEdit: Expanding 水平 + Preferred 垂直 + minHeight 28px
+          - QComboBox: Preferred 水平 + Preferred 垂直 + minHeight 28px
+          - minHeight 兜底: 即使 QSS 不生效，代码层也保证最低高度
+        """
+        if isinstance(widget, QLineEdit):
+            widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        else:
+            widget.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        widget.setMinimumHeight(30)
+        return widget
 
     # ── 主布局 ────────────────────────────────────────────
 
     def _build_ui(self):
-        # 顶部标题栏
-        title_frame = ttk.Frame(self.root, padding=(16, 12))
-        title_frame.pack(fill=tk.X)
+        """构建完整的 UI 结构。"""
+        central = QWidget()
+        self.setCentralWidget(central)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        ttk.Label(
-            title_frame, text="⚙️  转换参数设置",
-            style="Title.TLabel",
-        ).pack(side=tk.LEFT)
+        # ── 顶部标题栏 ──
+        main_layout.addWidget(self._build_header())
 
-        ttk.Label(
-            title_frame,
-            text=f"配置文件：{get_config_path()}",
-            style="Desc.TLabel",
-        ).pack(side=tk.RIGHT)
+        # ── 分隔线 ──
+        sep = QFrame()
+        sep.setObjectName("separator")
+        main_layout.addWidget(sep)
 
-        ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(fill=tk.X)
+        # ── 标签页 ──
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_md2word_tab(), "MD → Word")
+        self.tabs.addTab(self._build_word2md_tab(), "Word → MD")
+        self.tabs.addTab(self._build_other_tab(), "其他设置")
+        main_layout.addWidget(self.tabs, 1)  # stretch=1, 填充剩余空间
 
-        # Notebook
-        notebook = ttk.Notebook(self.root, padding=(8, 4))
-        notebook.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        # ── 底部按钮栏 ──
+        main_layout.addWidget(self._build_footer())
 
-        # 三个标签页
-        tab_md2word = ttk.Frame(notebook)
-        notebook.add(tab_md2word, text="  MD → Word  ")
-        self._build_md2word_tab(tab_md2word)
+    def _build_header(self) -> QWidget:
+        """顶部标题栏：标题 + 配置文件路径。"""
+        header = QWidget()
+        header.setFixedHeight(56)
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(18, 14, 18, 14)
 
-        tab_word2md = ttk.Frame(notebook)
-        notebook.add(tab_word2md, text="  Word → MD  ")
-        self._build_word2md_tab(tab_word2md)
+        title = self._make_label("⚙ 转换参数设置",
+                                 object_name="sectionTitle", bold=True, font_size=15)
+        layout.addWidget(title)
 
-        tab_other = ttk.Frame(notebook)
-        notebook.add(tab_other, text="  其他设置  ")
-        self._build_other_tab(tab_other)
+        layout.addStretch()
 
-        # 底部按钮
-        btn_frame = ttk.Frame(self.root, padding=(12, 8))
-        btn_frame.pack(fill=tk.X)
+        config_label = self._make_label(f"配置文件：{get_config_path()}",
+                                        object_name="descLabel")
+        layout.addWidget(config_label)
 
-        ttk.Button(
-            btn_frame, text="恢复默认设置",
-            command=self._reset_defaults,
-        ).pack(side=tk.LEFT, padx=4)
+        return header
 
-        ttk.Button(
-            btn_frame, text="取消",
-            command=self.root.destroy,
-        ).pack(side=tk.RIGHT, padx=4)
+    def _build_footer(self) -> QWidget:
+        """底部按钮栏：恢复默认 / 取消 / 保存。"""
+        footer = QWidget()
+        footer.setFixedHeight(60)
+        layout = QHBoxLayout(footer)
+        layout.setContentsMargins(14, 12, 14, 12)
 
-        ttk.Button(
-            btn_frame, text="💾  保存设置",
-            style="Save.TButton",
-            command=self._save_settings,
-        ).pack(side=tk.RIGHT, padx=8)
+        reset_btn = QPushButton("恢复默认设置")
+        reset_btn.setObjectName("resetBtn")
+        reset_btn.clicked.connect(self._reset_defaults)
+        layout.addWidget(reset_btn)
+
+        layout.addStretch()
+
+        cancel_btn = QPushButton("取消")
+        cancel_btn.clicked.connect(self.close)
+        layout.addWidget(cancel_btn)
+
+        save_btn = QPushButton("保存设置")
+        save_btn.setObjectName("saveBtn")
+        save_btn.clicked.connect(self._save_settings)
+        layout.addWidget(save_btn)
+
+        return footer
 
     # ═══════════════════════════════════════════════════════
     #  Tab 1: MD → Word
     # ═══════════════════════════════════════════════════════
 
-    def _build_md2word_tab(self, parent):
-        frame = ttk.Frame(parent, padding=(16, 12))
-        frame.pack(fill=tk.BOTH, expand=True)
+    def _build_md2word_tab(self) -> QWidget:
+        """构建 MD→Word 标签页。"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
 
         # ── Pandoc 状态 ──
-        pandoc_frame = ttk.LabelFrame(frame, text="Pandoc 引擎", padding=12)
-        pandoc_frame.pack(fill=tk.X, pady=(0, 12))
-
-        from pandoc_engine import has_pandoc, get_pandoc_version
-        if has_pandoc():
-            ver = get_pandoc_version() or "未知"
-            status = f"✅ Pandoc {ver} — 已就绪"
-            desc = "所有 MD→Word 转换均通过 Pandoc 引擎处理（Typora 同款引擎）。"
-        else:
-            status = "⚠️ 未检测到 Pandoc"
-            desc = "MD→Word 将回退到内置引擎，输出质量会降低。\n请将 pandoc.exe 放入应用目录。"
-
-        ttk.Label(pandoc_frame, text=status, style="Section.TLabel").pack(
-            anchor=tk.W, pady=(0, 4))
-        ttk.Label(pandoc_frame, text=desc, style="Desc.TLabel").pack(anchor=tk.W)
+        layout.addWidget(self._build_pandoc_status())
 
         # ── 样式模板 ──
-        template_frame = ttk.LabelFrame(
-            frame,
-            text="📄  输出样式模板（控制 docx 的字体、颜色、行距等外观）",
-            padding=10,
-        )
-        template_frame.pack(fill=tk.X, pady=(0, 12))
+        layout.addWidget(self._build_template_section())
 
-        from pandoc_engine import get_builtin_template_path
-        builtin_path = get_builtin_template_path()
-        self._builtin_template_exists = builtin_path is not None
+        # ── 标题映射（只读展示）──
+        layout.addWidget(self._build_heading_mapping())
 
-        self._template_labels = {
-            "built-in": "内置模板 (template.docx)",
-            "custom": "自定义模板...",
-            "none": "不使用模板",
-        }
+        layout.addStretch()
 
-        ref_value = self.config.get("pandoc_reference_doc", "built-in")
-        self._custom_template_path = ""
-        if ref_value == "built-in":
-            self.template_mode = tk.StringVar(value=self._template_labels["built-in"])
-        elif ref_value and ref_value.strip():
-            self.template_mode = tk.StringVar(value=self._template_labels["custom"])
-            self._custom_template_path = ref_value
+        return tab
+
+    def _build_pandoc_status(self) -> QWidget:
+        """Pandoc 引擎状态显示。"""
+        group = QGroupBox("Pandoc 引擎")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(4)
+
+        if has_pandoc():
+            ver = get_pandoc_version() or "未知"
+            status = self._make_label(f"✅ Pandoc {ver} — 已就绪",
+                                      object_name="successLabel")
+            desc = self._make_label(
+                "所有 MD→Word 转换均通过 Pandoc 引擎处理（Typora 同款引擎）。",
+                object_name="descLabel")
         else:
-            self.template_mode = tk.StringVar(value=self._template_labels["none"])
+            status = self._make_label("⚠️ 未检测到 Pandoc",
+                                      object_name="warningLabel")
+            desc = self._make_label(
+                "MD→Word 将回退到内置引擎，输出质量会降低。\n"
+                "请将 pandoc.exe 放入应用目录。",
+                object_name="descLabel")
 
-        mode_row = ttk.Frame(template_frame)
-        mode_row.pack(fill=tk.X, pady=(0, 4))
+        layout.addWidget(status)
+        layout.addWidget(desc)
 
-        ttk.Label(mode_row, text="模板选择：").pack(side=tk.LEFT, padx=(0, 8))
+        return group
 
-        self.template_combo = ttk.Combobox(
-            mode_row,
-            textvariable=self.template_mode,
-            values=list(self._template_labels.values()),
-            state="readonly",
-            width=30,
+    def _build_template_section(self) -> QWidget:
+        """样式模板选择区域。"""
+        group = QGroupBox("📄 输出样式模板（控制 docx 的字体、颜色、行距等外观）")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(10)
+
+        # ── 两个操作按钮 ──
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        open_builtin_btn = QPushButton("打开内置模板")
+        open_builtin_btn.setToolTip(
+            str(get_builtin_template_path()) if self._builtin_available
+            else "内置模板不存在"
         )
-        self.template_combo.pack(side=tk.LEFT, padx=4)
-        self.template_combo.bind("<<ComboboxSelected>>", self._on_template_mode_change)
+        open_builtin_btn.clicked.connect(self._open_builtin_template)
+        if not self._builtin_available:
+            open_builtin_btn.setEnabled(False)
+        btn_row.addWidget(open_builtin_btn)
 
-        # 内置模板状态
-        if self._builtin_template_exists:
-            ttk.Label(
-                template_frame,
-                text=f"内置模板：{builtin_path}",
-                style="Desc.TLabel",
-            ).pack(anchor=tk.W, pady=(2, 0))
+        open_folder_btn = QPushButton("打开模板文件夹")
+        open_folder_btn.setToolTip(str(_get_templates_dir()))
+        open_folder_btn.clicked.connect(self._open_templates_folder)
+        btn_row.addWidget(open_folder_btn)
+
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+        # ── 提示文字 ──
+        hint = self._make_label(
+            "💡 将 .docx 模板文件放入模板文件夹重新打开软件即可识别，"
+            "可修改内置模板并另存为新模板。",
+            object_name="descLabel", word_wrap=True)
+        layout.addWidget(hint)
+
+        # ── 模板选择（单选列表）──
+        select_label = self._make_label("模板选择：", bold=True)
+        layout.addWidget(select_label)
+
+        # 复选框容器（QButtonGroup.setExclusive 保证互斥，行为同单选）
+        self.template_check_group = QButtonGroup(self)
+        self.template_check_group.setExclusive(True)
+
+        check_container = QWidget()
+        check_layout = QVBoxLayout(check_container)
+        check_layout.setContentsMargins(8, 2, 0, 2)
+        check_layout.setSpacing(6)
+
+        # 内置模板 — 始终存在、默认选中、不可删除
+        self.builtin_check = QCheckBox("内置模板.docx（默认）")
+        self.builtin_check.setChecked(True)
+        self.builtin_check.toggled.connect(self._on_template_changed)
+        self.builtin_template_path = get_builtin_template_path()
+        if self._builtin_available:
+            self.builtin_check.setToolTip(str(self.builtin_template_path))
         else:
-            ttk.Label(
-                template_frame,
-                text="⚠️ 未找到内置 template.docx，请将其放入应用目录",
-                style="Desc.TLabel",
-                foreground="#c00",
-            ).pack(anchor=tk.W, pady=(2, 0))
+            self.builtin_check.setEnabled(False)
+            self.builtin_check.setText("内置模板.docx（未找到）")
+        check_layout.addWidget(self.builtin_check)
+        self.template_check_group.addButton(self.builtin_check, id=0)
 
-        # 自定义路径（默认隐藏）
-        self.custom_frame = ttk.Frame(template_frame)
-        if self._get_template_mode_internal() == "custom":
-            self.custom_frame.pack(fill=tk.X, pady=(8, 0))
+        # 自定义模板 — 动态扫描
+        self.custom_checks: list[QCheckBox] = []
+        for i, filename in enumerate(self._custom_templates, start=1):
+            cb = QCheckBox(f"{i}、{filename}")
+            template_path = _get_templates_dir() / filename
+            cb.setToolTip(str(template_path))
+            cb.toggled.connect(self._on_template_changed)
+            check_layout.addWidget(cb)
+            self.template_check_group.addButton(cb, id=i)
+            self.custom_checks.append(cb)
 
-        ttk.Label(self.custom_frame, text="模板路径：").pack(side=tk.LEFT, padx=(0, 8))
-        self.ref_doc_var = tk.StringVar(value=self._custom_template_path)
-        ttk.Entry(self.custom_frame, textvariable=self.ref_doc_var, width=38).pack(
-            side=tk.LEFT, padx=4, fill=tk.X, expand=True)
-        ttk.Button(self.custom_frame, text="浏览...",
-                   command=self._browse_template).pack(side=tk.LEFT, padx=4)
+        layout.addWidget(check_container)
 
-        # ── 标题映射（固定，只读展示）──
-        heading_frame = ttk.LabelFrame(
-            frame,
-            text="Markdown 标题 → Word 样式（固定映射，由 Pandoc 自动处理）",
-            padding=10,
+        return group
+
+    def _build_heading_mapping(self) -> QWidget:
+        """标题映射展示（只读）。"""
+        group = QGroupBox(
+            "Markdown 标题 → Word 样式（固定映射，由 Pandoc 自动处理）"
         )
-        heading_frame.pack(fill=tk.X, pady=(0, 12))
+        layout = QHBoxLayout(group)
+        layout.setSpacing(0)
 
         items = [
             ("#", "Heading 1"), ("##", "Heading 2"),
@@ -237,271 +753,368 @@ class SettingsApp:
             ("#####", "Heading 5"), ("######", "Heading 6"),
         ]
         for md_pfx, word_style in items:
-            row = ttk.Frame(heading_frame)
-            row.pack(side=tk.LEFT, padx=(0, 16), pady=2)
-            ttk.Label(row, text=f"{md_pfx}  →  {word_style}",
-                      style="Desc.TLabel").pack()
+            item = self._make_label(f"{md_pfx}  →  {word_style}",
+                                    object_name="descLabel", min_width=110)
+            layout.addWidget(item)
 
-        # ── 未来扩展 ──
-        ttk.Label(
-            frame,
-            text="🔮  未来可扩展：页面设置（A4/Letter）、目录生成、"
-                 "代码块高亮样式、图片分辨率控制",
-            style="Future.TLabel",
-        ).pack(anchor=tk.W)
+        layout.addStretch()
+        return group
+
+    # ── 模板操作 ──────────────────────────────────────────
+
+    def _open_builtin_template(self):
+        """用系统默认程序打开内置模板。"""
+        path = get_builtin_template_path()
+        if path and path.is_file():
+            try:
+                os.startfile(str(path))
+            except Exception:
+                QMessageBox.warning(
+                    self, "无法打开",
+                    f"无法打开内置模板文件：\n{path}"
+                )
+        else:
+            QMessageBox.information(
+                self, "模板不存在",
+                "内置模板文件（内置模板.docx）未找到。\n\n"
+                "请确保 内置模板.docx 位于应用目录中。"
+            )
+
+    def _open_templates_folder(self):
+        """用资源管理器打开模板文件夹。"""
+        templates_dir = _get_templates_dir()
+        try:
+            os.startfile(str(templates_dir))
+        except Exception:
+            QMessageBox.warning(
+                self, "无法打开",
+                f"无法打开模板文件夹：\n{templates_dir}"
+            )
+
+    def _on_template_changed(self, _checked: bool):
+        """模板单选按钮切换时触发。可用于实时预览状态更新。"""
+        pass  # 当前仅用于保存时读取
+
+    def _get_selected_template(self) -> str:
+        """获取当前选中的模板配置值。"""
+        checked_button = self.template_check_group.checkedButton()
+        if checked_button is None or checked_button is self.builtin_check:
+            return "built-in"
+
+        # 自定义模板：从按钮文本解析文件名
+        # 格式: "1、corporate-style.docx"
+        text = checked_button.text()
+        # 去掉编号前缀 "N、"
+        for sep in ("、", ". "):
+            if sep in text:
+                filename = text.split(sep, 1)[-1].strip()
+                break
+        else:
+            filename = text.strip()
+        return f"custom:{filename}"
+
+    def _set_selected_template(self, config_value: str):
+        """根据配置值选中对应的模板复选框。"""
+        mode, filename = _parse_template_config(config_value)
+
+        if mode == "built-in" or mode == "missing":
+            self.builtin_check.setChecked(True)
+        elif mode == "custom" and filename:
+            # 查找匹配的自定义按钮
+            for cb in self.custom_checks:
+                # 从按钮文本提取文件名
+                text = cb.text()
+                for sep in ("、", ". "):
+                    if sep in text:
+                        fname = text.split(sep, 1)[-1].strip()
+                        break
+                else:
+                    fname = text.strip()
+                if fname == filename:
+                    cb.setChecked(True)
+                    return
+            # 文件已被删除，回退到内置
+            self.builtin_check.setChecked(True)
 
     # ═══════════════════════════════════════════════════════
     #  Tab 2: Word → MD
     # ═══════════════════════════════════════════════════════
 
-    def _build_word2md_tab(self, parent):
-        frame = ttk.Frame(parent, padding=(16, 12))
-        frame.pack(fill=tk.BOTH, expand=True)
+    def _build_word2md_tab(self) -> QWidget:
+        """构建 Word→MD 标签页。"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
 
         # ── 标题识别 ──
-        heading_frame = ttk.LabelFrame(
-            frame, text="🔍  标题识别（基于大纲级别）", padding=10)
-        heading_frame.pack(fill=tk.X, pady=(0, 12))
+        layout.addWidget(self._build_heading_detection())
 
-        ttk.Label(
-            heading_frame,
-            text="自动读取 Word 样式的大纲级别 (outlineLvl)，与样式名称无关：",
-            style="Desc.TLabel",
-        ).pack(anchor=tk.W, pady=(0, 6))
+        # ── 内容提取 ──
+        layout.addWidget(self._build_content_extraction())
 
+        # ── 图片处理 ──
+        layout.addWidget(self._build_image_settings())
+
+        # ── 输出格式 ──
+        layout.addWidget(self._build_output_format())
+
+        layout.addStretch()
+
+        return tab
+
+    def _build_heading_detection(self) -> QWidget:
+        """标题识别说明。"""
+        group = QGroupBox("🔍 标题识别（基于大纲级别）")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(6)
+
+        desc = self._make_label(
+            "自动读取 Word 样式的大纲级别 (outlineLvl)，与样式名称无关：",
+            object_name="descLabel", word_wrap=True)
+        layout.addWidget(desc)
+
+        # 映射展示行
+        map_row = QHBoxLayout()
+        map_row.setSpacing(4)
         levels = [
             ("Lv0", "#"), ("Lv1", "##"), ("Lv2", "###"),
             ("Lv3", "####"), ("Lv4", "#####"), ("Lv5", "######"),
         ]
-        row = ttk.Frame(heading_frame)
-        row.pack(fill=tk.X, pady=(0, 4))
         for lv, md in levels:
-            ttk.Label(row, text=f"{lv} → {md}  ",
-                      style="Mono.TLabel").pack(side=tk.LEFT, padx=(0, 12))
+            item = self._make_label(f"{lv} → {md}",
+                                    object_name="codeLabel", min_width=75)
+            map_row.addWidget(item)
+        map_row.addStretch()
+        layout.addLayout(map_row)
 
-        ttk.Label(
-            heading_frame,
-            text="不同样式名但相同大纲级别 → 输出同一 MD 标题层级。"
-                 "无需手动配置任何映射。",
-            style="Desc.TLabel",
-        ).pack(anchor=tk.W)
+        note = self._make_label(
+            "不同样式名但相同大纲级别 → 输出同一 MD 标题层级。"
+            "无需手动配置任何映射。",
+            object_name="descLabel", word_wrap=True)
+        layout.addWidget(note)
 
-        # ── 内容提取 ──
-        content_frame = ttk.LabelFrame(
-            frame, text="内容提取", padding=10)
-        content_frame.pack(fill=tk.X, pady=(0, 12))
+        return group
 
-        self.preserve_tables_var = tk.BooleanVar(
-            value=self.config.get("preserve_tables", True))
-        self.preserve_lists_var = tk.BooleanVar(
-            value=self.config.get("preserve_lists", True))
-        self.preserve_links_var = tk.BooleanVar(
-            value=self.config.get("preserve_hyperlinks", True))
+    def _build_content_extraction(self) -> QWidget:
+        """内容提取选项。"""
+        group = QGroupBox("内容提取")
+        layout = QHBoxLayout(group)
+        layout.setSpacing(24)
 
-        cb_row = ttk.Frame(content_frame)
-        cb_row.pack(fill=tk.X)
-        ttk.Checkbutton(cb_row, text="转换表格",
-                        variable=self.preserve_tables_var).pack(
-            side=tk.LEFT, padx=(0, 20))
-        ttk.Checkbutton(cb_row, text="转换列表",
-                        variable=self.preserve_lists_var).pack(
-            side=tk.LEFT, padx=(0, 20))
-        ttk.Checkbutton(cb_row, text="保留超链接",
-                        variable=self.preserve_links_var).pack(side=tk.LEFT)
+        self.preserve_tables_cb = QCheckBox("转换表格")
+        self.preserve_lists_cb = QCheckBox("转换列表")
+        self.preserve_links_cb = QCheckBox("保留超链接")
 
-        # ── 图片 ──
-        img_frame = ttk.LabelFrame(frame, text="图片处理", padding=10)
-        img_frame.pack(fill=tk.X, pady=(0, 12))
+        layout.addWidget(self.preserve_tables_cb)
+        layout.addWidget(self.preserve_lists_cb)
+        layout.addWidget(self.preserve_links_cb)
+        layout.addStretch()
 
-        self.extract_images_var = tk.BooleanVar(
-            value=self.config.get("extract_images", True))
-        ttk.Checkbutton(
-            img_frame, text="提取 Word 文档中嵌入的图片",
-            variable=self.extract_images_var,
-        ).pack(anchor=tk.W, pady=(0, 4))
+        return group
 
-        img_sub = ttk.Frame(img_frame)
-        img_sub.pack(fill=tk.X, padx=(24, 0))
-        ttk.Label(img_sub, text="保存到文件夹：").pack(side=tk.LEFT)
-        self.image_folder_var = tk.StringVar(
-            value=self.config.get("image_folder", "images"))
-        ttk.Entry(img_sub, textvariable=self.image_folder_var, width=18).pack(
-            side=tk.LEFT, padx=8)
+    def _build_image_settings(self) -> QWidget:
+        """图片处理设置。"""
+        group = QGroupBox("图片处理")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
 
-        # ── 输出格式 ──
-        output_frame = ttk.LabelFrame(frame, text="输出格式", padding=10)
-        output_frame.pack(fill=tk.X, pady=(0, 12))
+        self.extract_images_cb = QCheckBox("提取 Word 文档中嵌入的图片")
+        layout.addWidget(self.extract_images_cb)
 
-        self.add_toc_var = tk.BooleanVar(
-            value=self.config.get("add_toc", True))
-        ttk.Checkbutton(
-            output_frame,
-            text="在 Markdown 开头添加 [TOC] 目录占位符",
-            variable=self.add_toc_var,
-        ).pack(anchor=tk.W, pady=(0, 6))
+        # 图片保存路径
+        img_sub = QHBoxLayout()
+        img_sub.setContentsMargins(24, 0, 0, 0)
+        img_sub.setSpacing(8)
 
-        enc_row = ttk.Frame(output_frame)
-        enc_row.pack(fill=tk.X)
-        ttk.Label(enc_row, text="输出编码：").pack(side=tk.LEFT)
-        self.encoding_var = tk.StringVar(
-            value=self.config.get("output_encoding", "utf-8"))
-        ttk.Combobox(
-            enc_row, textvariable=self.encoding_var,
-            values=["utf-8", "utf-8-sig", "gbk", "gb2312"],
-            width=12, state="readonly",
-        ).pack(side=tk.LEFT, padx=8)
+        img_sub.addWidget(self._make_label("保存到文件夹："))
+        self.image_folder_input = self._protect_text_widget(QLineEdit())
+        self.image_folder_input.setMinimumWidth(120)
+        img_sub.addWidget(self.image_folder_input)
+        img_sub.addStretch()
 
-        # ── 未来扩展 ──
-        ttk.Label(
-            frame,
-            text="🔮  未来可扩展：批注/修订提取、YAML 元数据头、"
-                 "页面范围选择、图片格式转换",
-            style="Future.TLabel",
-        ).pack(anchor=tk.W)
+        layout.addLayout(img_sub)
+
+        return group
+
+    def _build_output_format(self) -> QWidget:
+        """输出格式设置。"""
+        group = QGroupBox("输出格式")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
+
+        self.add_toc_cb = QCheckBox("在 Markdown 开头添加 [TOC] 目录占位符")
+        layout.addWidget(self.add_toc_cb)
+
+        # 编码选择
+        enc_row = QHBoxLayout()
+        enc_row.setSpacing(8)
+
+        enc_row.addWidget(self._make_label("输出编码："))
+        self.encoding_combo = self._protect_text_widget(QComboBox())
+        self.encoding_combo.addItems(["utf-8", "utf-8-sig", "gbk", "gb2312"])
+        self.encoding_combo.setCurrentIndex(0)
+        enc_row.addWidget(self.encoding_combo)
+        enc_row.addStretch()
+
+        layout.addLayout(enc_row)
+
+        return group
 
     # ═══════════════════════════════════════════════════════
     #  Tab 3: 其他设置
     # ═══════════════════════════════════════════════════════
 
-    def _build_other_tab(self, parent):
-        frame = ttk.Frame(parent, padding=(16, 12))
-        frame.pack(fill=tk.BOTH, expand=True)
+    def _build_other_tab(self) -> QWidget:
+        """构建其他设置标签页。"""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(18, 14, 18, 14)
+        layout.setSpacing(12)
 
-        # ── 通知 ──
-        notify_frame = ttk.LabelFrame(
-            frame, text="🔔  Windows 系统通知", padding=12)
-        notify_frame.pack(fill=tk.X, pady=(0, 12))
+        # ── 通知设置 ──
+        layout.addWidget(self._build_notification_settings())
 
-        self.notif_enabled_var = tk.BooleanVar(
-            value=self.config.get("notification", {}).get("enabled", True))
-        ttk.Checkbutton(
-            notify_frame, text="启用通知（关闭后不显示任何通知）",
-            variable=self.notif_enabled_var,
-        ).pack(anchor=tk.W)
+        layout.addStretch()
 
-        self.show_success_var = tk.BooleanVar(
-            value=self.config.get("notification", {}).get("show_success", True))
-        ttk.Checkbutton(
-            notify_frame, text="转换成功时也通知（关闭后仅在出错时弹出）",
-            variable=self.show_success_var,
-        ).pack(anchor=tk.W, pady=(4, 0))
+        return tab
 
-        # 时长
-        dur_row = ttk.Frame(notify_frame)
-        dur_row.pack(fill=tk.X, pady=(10, 0))
+    def _build_notification_settings(self) -> QWidget:
+        """Windows 系统通知设置。"""
+        group = QGroupBox("🔔 Windows 系统通知")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
 
-        ttk.Label(dur_row, text="显示时长：").pack(side=tk.LEFT)
+        self.notif_enabled_cb = QCheckBox("启用通知（关闭后不显示任何通知）")
+        layout.addWidget(self.notif_enabled_cb)
 
-        old_dur = self.config.get("notification", {}).get("duration", "5秒")
-        self.duration_var = tk.StringVar(value=old_dur)
-        ttk.Combobox(
-            dur_row, textvariable=self.duration_var,
-            values=["5秒", "10秒", "25秒", "持续", "紧急"],
-            state="readonly",
-            width=8,
-        ).pack(side=tk.LEFT, padx=8)
+        self.show_success_cb = QCheckBox("转换成功时也通知（关闭后仅在出错时弹出）")
+        layout.addWidget(self.show_success_cb)
 
-        # 路径显示
-        self.show_path_var = tk.BooleanVar(
-            value=self.config.get("notification", {}).get("show_output_path", True))
-        ttk.Checkbutton(
-            notify_frame,
-            text="显示输出文件路径（可点击打开所在文件夹）",
-            variable=self.show_path_var,
-        ).pack(anchor=tk.W, pady=(10, 0))
-
-        # 预览
-        preview_row = ttk.Frame(notify_frame)
-        preview_row.pack(fill=tk.X, pady=(10, 0))
-        ttk.Button(
-            preview_row, text="🔔  预览通知效果",
-            command=self._preview_notification,
-        ).pack(side=tk.LEFT, padx=(0, 12))
-        ttk.Label(
-            preview_row, text="查看当前设置下的通知效果",
-            style="Desc.TLabel",
-        ).pack(side=tk.LEFT)
-
-        # ── 未来扩展 ──
-        ttk.Label(
-            frame,
-            text="🔮  未来可扩展：界面语言、开机自启、文件关联、自动更新检查",
-            style="Future.TLabel",
-        ).pack(anchor=tk.W)
-
-    # ── 模板选择逻辑 ──────────────────────────────────────
-
-    def _get_template_mode_internal(self) -> str:
-        """将 Combobox 显示标签转换回内部值。"""
-        display = self.template_mode.get()
-        for key, label in self._template_labels.items():
-            if label == display:
-                return key
-        return "built-in"
-
-    def _on_template_mode_change(self, event=None):
-        if self._get_template_mode_internal() == "custom":
-            self.custom_frame.pack(fill=tk.X, pady=(8, 0))
-        else:
-            self.custom_frame.pack_forget()
-
-    def _browse_template(self):
-        from tkinter import filedialog
-        path = filedialog.askopenfilename(
-            title="选择参考样式模板",
-            filetypes=[("Word 文档", "*.docx"), ("所有文件", "*.*")],
+        # 显示时长
+        dur_row = QHBoxLayout()
+        dur_row.setSpacing(8)
+        dur_row.addWidget(self._make_label("显示时长："))
+        self.duration_combo = self._protect_text_widget(QComboBox())
+        self.duration_combo.addItems(["5秒", "10秒", "25秒", "持续"])
+        self.duration_combo.setToolTip(
+            "5秒/10秒/25秒 — 到时自动消失\n"
+            "持续 — 一直显示直到手动关闭"
         )
-        if path:
-            self.ref_doc_var.set(path)
-            self._custom_template_path = path
+        dur_row.addWidget(self.duration_combo)
+        dur_row.addStretch()
+        layout.addLayout(dur_row)
+
+        self.show_path_cb = QCheckBox("显示输出文件路径（可点击打开所在文件夹）")
+        layout.addWidget(self.show_path_cb)
+
+        # 预览按钮
+        preview_row = QHBoxLayout()
+        preview_row.setSpacing(12)
+        preview_btn = QPushButton("🔔 预览通知效果")
+        preview_btn.clicked.connect(self._preview_notification)
+        preview_row.addWidget(preview_btn)
+        preview_label = self._make_label("查看当前设置下的通知效果",
+                                         object_name="descLabel")
+        preview_row.addWidget(preview_label)
+        preview_row.addStretch()
+        layout.addLayout(preview_row)
+
+        return group
 
     # ── 通知预览 ──────────────────────────────────────────
 
     def _preview_notification(self):
+        """显示通知预览。先隐藏主窗口再恢复。"""
         from notification import show_notification
-        self.root.withdraw()
+
+        self.hide()
+        # 延迟一下确保窗口已隐藏
+        QApplication.processEvents()
+
         show_notification(
             title="✅ 转换成功（预览）",
             message="这是通知预览效果。\n\n"
                     "源文件：example.docx\n"
                     "输出文件：example.md",
             output_path=str(Path.home() / "Desktop" / "example.md"),
-            auto_close=self.duration_var.get(),
+            auto_close=self.duration_combo.currentText(),
         )
-        self.root.deiconify()
 
-    # ── 保存 & 重置 ───────────────────────────────────────
+        self.show()
+
+    # ═══════════════════════════════════════════════════════
+    #  配置读写
+    # ═══════════════════════════════════════════════════════
+
+    def _load_config_values(self):
+        """将配置文件的值填入 UI 控件。"""
+        # ── Tab 1: 模板选择 ──
+        ref_doc = self.config.get("pandoc_reference_doc", "built-in")
+        self._set_selected_template(ref_doc)
+
+        # ── Tab 2: 内容提取 ──
+        self.preserve_tables_cb.setChecked(
+            self.config.get("preserve_tables", True))
+        self.preserve_lists_cb.setChecked(
+            self.config.get("preserve_lists", True))
+        self.preserve_links_cb.setChecked(
+            self.config.get("preserve_hyperlinks", True))
+
+        # ── Tab 2: 图片处理 ──
+        self.extract_images_cb.setChecked(
+            self.config.get("extract_images", True))
+        self.image_folder_input.setText(
+            self.config.get("image_folder", "images"))
+
+        # ── Tab 2: 输出格式 ──
+        self.add_toc_cb.setChecked(
+            self.config.get("add_toc", True))
+        encoding = self.config.get("output_encoding", "utf-8")
+        idx = self.encoding_combo.findText(encoding)
+        if idx >= 0:
+            self.encoding_combo.setCurrentIndex(idx)
+
+        # ── Tab 3: 通知 ──
+        notif = self.config.get("notification", {})
+        self.notif_enabled_cb.setChecked(notif.get("enabled", True))
+        self.show_success_cb.setChecked(notif.get("show_success", True))
+        duration = notif.get("duration", "5秒")
+        idx = self.duration_combo.findText(duration)
+        if idx >= 0:
+            self.duration_combo.setCurrentIndex(idx)
+        else:
+            # 兼容旧配置中的无效值（如已移除的"紧急"），回退到默认
+            self.duration_combo.setCurrentIndex(0)  # "5秒"
+            notif["duration"] = "5秒"  # 修正内存中的脏值，下次保存时自动清理
+        self.show_path_cb.setChecked(notif.get("show_output_path", True))
 
     def _save_settings(self):
-        # MD→Word 设置
-        mode = self._get_template_mode_internal()
-        if mode == "built-in":
-            self.config["pandoc_reference_doc"] = "built-in"
-        elif mode == "custom":
-            self.config["pandoc_reference_doc"] = self.ref_doc_var.get()
-        else:
-            self.config["pandoc_reference_doc"] = ""
+        """收集 UI 值并保存配置。"""
+        # ── Tab 1: 模板 ──
+        self.config["pandoc_reference_doc"] = self._get_selected_template()
 
-        # Word→MD 设置
-        self.config["preserve_tables"] = self.preserve_tables_var.get()
-        self.config["preserve_lists"] = self.preserve_lists_var.get()
-        self.config["preserve_hyperlinks"] = self.preserve_links_var.get()
-        self.config["extract_images"] = self.extract_images_var.get()
-        self.config["image_folder"] = self.image_folder_var.get()
-        self.config["add_toc"] = self.add_toc_var.get()
-        self.config["output_encoding"] = self.encoding_var.get()
+        # ── Tab 2: 内容提取 ──
+        self.config["preserve_tables"] = self.preserve_tables_cb.isChecked()
+        self.config["preserve_lists"] = self.preserve_lists_cb.isChecked()
+        self.config["preserve_hyperlinks"] = self.preserve_links_cb.isChecked()
 
-        # 通知设置
-        self.config.setdefault("notification", {})["enabled"] = \
-            self.notif_enabled_var.get()
-        self.config.setdefault("notification", {})["show_success"] = \
-            self.show_success_var.get()
-        self.config.setdefault("notification", {})["duration"] = \
-            self.duration_var.get()
-        self.config.setdefault("notification", {})["show_output_path"] = \
-            self.show_path_var.get()
+        # ── Tab 2: 图片 ──
+        self.config["extract_images"] = self.extract_images_cb.isChecked()
+        self.config["image_folder"] = self.image_folder_input.text().strip() or "images"
+
+        # ── Tab 2: 输出 ──
+        self.config["add_toc"] = self.add_toc_cb.isChecked()
+        self.config["output_encoding"] = self.encoding_combo.currentText()
+
+        # ── Tab 3: 通知 ──
+        notif = self.config.setdefault("notification", {})
+        notif["enabled"] = self.notif_enabled_cb.isChecked()
+        notif["show_success"] = self.show_success_cb.isChecked()
+        notif["duration"] = self.duration_combo.currentText()
+        notif["show_output_path"] = self.show_path_cb.isChecked()
         # 清理旧配置键
-        self.config.setdefault("notification", {}).pop("auto_close_seconds", None)
+        notif.pop("auto_close_seconds", None)
 
         # 清理已不再使用的旧配置项
         self.config.pop("use_pandoc", None)
@@ -509,39 +1122,80 @@ class SettingsApp:
         heading.pop("word_to_md", None)
 
         if save_config(self.config):
-            messagebox.showinfo("保存成功", "设置已保存到配置文件。")
+            self._dirty = False
+            QMessageBox.information(self, "保存成功", "设置已保存到配置文件。")
         else:
-            messagebox.showerror("保存失败", "无法写入配置文件，请检查文件权限。")
+            QMessageBox.critical(
+                self, "保存失败",
+                "无法写入配置文件，请检查文件权限。"
+            )
 
     def _reset_defaults(self):
-        if messagebox.askyesno(
-            "确认恢复默认",
+        """恢复所有设置为默认值。"""
+        reply = QMessageBox.question(
+            self, "确认恢复默认",
             "确定要恢复所有设置为默认值吗？\n\n"
             "这将重置：\n"
             "  · 样式模板 → 内置模板\n"
             "  · 内容提取 → 全部开启\n"
             "  · 图片提取 → 开启\n"
             "  · 输出格式 → UTF-8，添加 TOC\n"
-            "  · 通知 → 全部开启，25秒",
-        ):
-            from config import _DEFAULT_CONFIG
-            _DEFAULT_CONFIG["notification"]["duration"] = "5秒"
-            _DEFAULT_CONFIG["pandoc_reference_doc"] = "built-in"
-            _DEFAULT_CONFIG["heading_mapping"] = {"md_to_word": {
-                "#": "Heading 1", "##": "Heading 2", "###": "Heading 3",
-                "####": "Heading 4", "#####": "Heading 5", "######": "Heading 6",
-            }}
-            save_config(_DEFAULT_CONFIG)
-            self.root.destroy()
-            new_root = tk.Tk()
-            SettingsApp(new_root)
-            new_root.mainloop()
+            "  · 通知 → 全部开启，5秒",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
 
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        from config import _DEFAULT_CONFIG
+        _DEFAULT_CONFIG["notification"]["duration"] = "5秒"
+        _DEFAULT_CONFIG["pandoc_reference_doc"] = "built-in"
+        _DEFAULT_CONFIG["heading_mapping"] = {"md_to_word": {
+            "#": "Heading 1", "##": "Heading 2", "###": "Heading 3",
+            "####": "Heading 4", "#####": "Heading 5", "######": "Heading 6",
+        }}
+        save_config(_DEFAULT_CONFIG)
+
+        # 从备份恢复内置模板（用户可能删除或修改了它）
+        if restore_builtin_from_backup():
+            # 模板已恢复 — 刷新内置复选框状态
+            self._builtin_available = True
+            self.builtin_template_path = get_builtin_template_path()
+            self.builtin_check.setEnabled(True)
+            self.builtin_check.setText("内置模板.docx（默认）")
+            if self.builtin_template_path:
+                self.builtin_check.setToolTip(str(self.builtin_template_path))
+
+        # 重新加载配置并刷新 UI（无需销毁窗口）
+        self.config = load_config()
+        self._load_config_values()
+        self._dirty = False
+
+
+# ═══════════════════════════════════════════════════════════
+#  入口
+# ═══════════════════════════════════════════════════════════
 
 def main():
-    root = tk.Tk()
-    SettingsApp(root)
-    root.mainloop()
+    """启动设置窗口。"""
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+
+    # 生成 checkmark 图标并注入 QSS
+    icon_path = _ensure_checkmark_icon()
+
+    # 确保内置模板备份存在（用于"恢复默认设置"还原）
+    create_builtin_backup()
+    stylesheet = STYLESHEET.replace(
+        "CHECKMARK_PLACEHOLDER",
+        str(icon_path).replace("\\", "/"))
+    app.setStyleSheet(stylesheet)
+
+    window = SettingsWindow()
+    window.show()
+
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

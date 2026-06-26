@@ -33,14 +33,15 @@ _DEFAULT_CONFIG = {
 def _get_app_dir() -> Path:
     """获取应用根目录。
 
-    在 PyInstaller frozen 模式下，返回 .exe 所在目录；
-    在普通 Python 模式下，返回项目根目录（本文件向上两级）。
+    PyInstaller frozen 模式下，exe 位于 bin/ 子目录，返回 bin/ 的父级；
+    普通 Python 模式下，返回项目根目录（本文件向上两级）。
     """
     if getattr(sys, 'frozen', False):
-        # PyInstaller 打包后：exe 所在目录
-        return Path(sys.executable).resolve().parent
+        exe_dir = Path(sys.executable).resolve().parent
+        if exe_dir.name.lower() == "bin":
+            return exe_dir.parent
+        return exe_dir
     else:
-        # 开发模式：本文件在 src/ 下，项目根目录在 src/ 的父级
         return Path(__file__).resolve().parent.parent
 
 

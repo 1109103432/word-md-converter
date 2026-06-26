@@ -4,7 +4,7 @@ PyInstaller 打包脚本 —— 将两个入口分别构建为独立 .exe 文件
 用法: python build.py
 
 输出结构 (dist/):
-  ├── 转换工具.exe       (~20MB, 智能双向转换，自动识别文件类型)
+  ├── 开始转换.exe       (~20MB, 智能双向转换，自动识别文件类型)
   ├── 转换设置.exe       (~20MB, 参数配置)
   ├── config.json        (用户可编辑的配置文件)
   ├── 安装.bat           (终端用户安装脚本)
@@ -15,6 +15,11 @@ import shutil
 import sys
 import os
 from pathlib import Path
+
+# 确保中文输出不乱码
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+APP_VERSION = "2.1.0"
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
@@ -30,7 +35,7 @@ for d in [DIST, BUILD]:
 EXE_CONFIGS = [
     {
         "script": str(SRC / "converter_launcher.py"),
-        "name": "转换工具",
+        "name": "开始转换",
         "icon": str(ICONS / "converter.ico"),
         "desc": "Word ↔ Markdown 智能转换 - 拖入文件自动识别方向",
     },
@@ -49,17 +54,17 @@ COMMON_ARGS = [
     "--noconfirm",         # 自动覆盖
     "--clean",             # 清理临时文件
     "--log-level=WARN",    # 减少输出
-    # 确保 tkinter 相关模块被包含
-    "--hidden-import=tkinter",
-    "--hidden-import=tkinter.ttk",
-    "--hidden-import=tkinter.messagebox",
+    # PySide6 Qt 框架
+    "--hidden-import=PySide6.QtWidgets",
+    "--hidden-import=PySide6.QtCore",
+    "--hidden-import=PySide6.QtGui",
     # docx 相关
     "--hidden-import=docx",
     "--hidden-import=docx.opc.constants",
     # markdown
     "--hidden-import=markdown",
-    # winotify — Windows Toast 通知
-    "--hidden-import=winotify",
+    # win11toast — Windows Toast 通知
+    "--hidden-import=win11toast",
 ]
 
 
@@ -114,7 +119,7 @@ def build_exe(config: dict) -> bool:
 
 def main():
     print("=" * 60)
-    print("  Word <-> Markdown 转换工具 - PyInstaller 打包")
+    print(f"  Word ↔ Markdown 转换工具 v{APP_VERSION} - PyInstaller 打包")
     print("=" * 60)
     print(f"  Python: {sys.version}")
     print(f"  项目根目录: {ROOT}")
@@ -151,7 +156,7 @@ def main():
     print("  打包分发文件")
     print(f"{'='*60}")
 
-    # 下载/复制 Pandoc 便携版
+    # 下载/复制 Pandoc 便携版（先放到 dist 根，稍后移入 bin/）
     _ensure_pandoc(DIST)
 
     # 复制 config.json 到 dist
@@ -160,13 +165,34 @@ def main():
     shutil.copy(config_src, config_dst)
     print(f"  [OK] config.json")
 
-    # 复制 template.docx 到 dist（内置参考样式模板）
-    template_src = ROOT / "template.docx"
+    # 创建 模板/ 目录（内置模板 + 用户自定义模板存放处）
+    templates_dir = DIST / "模板"
+    templates_dir.mkdir(exist_ok=True)
+
+    # 复制 内置模板.docx 到 dist/模板/
+    template_src = ROOT / "模板" / "内置模板.docx"
     if template_src.exists():
-        shutil.copy(template_src, DIST / "template.docx")
-        print(f"  [OK] template.docx")
+        shutil.copy(template_src, templates_dir / "内置模板.docx")
+        print(f"  [OK] 模板/内置模板.docx")
     else:
-        print(f"  [WARN] template.docx 不存在 — MD→Word 将使用 Pandoc 默认样式")
+        print(f"  [WARN] 模板/内置模板.docx 不存在 — MD→Word 将使用 Pandoc 默认样式")
+
+    print(f"  [OK] 模板/ (自定义模板目录)")
+
+    # ── 隐藏可执行文件到 bin/ 目录 ──
+    bin_dir = DIST / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    for exe_name in ["开始转换.exe", "转换设置.exe", "pandoc.exe"]:
+        src = DIST / exe_name
+        if src.exists():
+            shutil.move(str(src), str(bin_dir / exe_name))
+    # Windows 隐藏 bin 目录
+    try:
+        import ctypes
+        ctypes.windll.kernel32.SetFileAttributesW(str(bin_dir), 0x02)  # FILE_ATTRIBUTE_HIDDEN
+    except Exception:
+        pass
+    print(f"  [OK] bin/ (隐藏的可执行文件)")
 
     # 创建终端用户安装脚本
     _create_installer_bat(DIST)
@@ -191,7 +217,7 @@ def main():
             print(f"    {f.name}  ({size:.1f} MB)")
 
     # 创建 zip
-    zip_path = ROOT / "Word-MD转换工具.zip"
+    zip_path = ROOT / f"Word-MD转换工具-v{APP_VERSION}.zip"
     print(f"\n  正在创建压缩包...")
     shutil.make_archive(
         str(zip_path.with_suffix("")),
@@ -218,7 +244,7 @@ echo   Word ^<-^> Markdown 转换工具 安装程序
 echo ============================================
 echo.
 echo   本工具包含两个程序：
-echo      [转换工具]    拖入 .docx 自动转 .md，拖入 .md 自动转 .docx
+echo      [开始转换]    拖入 .docx 自动转 .md，拖入 .md 自动转 .docx
 echo      [转换设置]    配置转换参数
 echo.
 
@@ -243,14 +269,16 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$WshShell = New-Object -ComObject WScript.Shell; " ^
     "$Desktop = [Environment]::GetFolderPath('Desktop'); " ^
     "" ^
-    "$s1 = $WshShell.CreateShortcut(\"$Desktop\转换工具.lnk\"); " ^
-    "$s1.TargetPath = '%APP_DIR%\转换工具.exe'; " ^
+    "$s1 = $WshShell.CreateShortcut(\"$Desktop\开始转换.lnk\"); " ^
+    "$s1.TargetPath = '%APP_DIR%\bin\开始转换.exe'; " ^
+    "$s1.IconLocation = '%APP_DIR%\bin\开始转换.exe,0'; " ^
     "$s1.WorkingDirectory = '%APP_DIR%'; " ^
     "$s1.Description = 'Word-Markdown双向智能转换 - 拖放文件到此图标即可自动识别'; " ^
     "$s1.Save(); " ^
     "" ^
     "$s2 = $WshShell.CreateShortcut(\"$Desktop\转换设置.lnk\"); " ^
-    "$s2.TargetPath = '%APP_DIR%\转换设置.exe'; " ^
+    "$s2.TargetPath = '%APP_DIR%\bin\转换设置.exe'; " ^
+    "$s2.IconLocation = '%APP_DIR%\bin\转换设置.exe,0'; " ^
     "$s2.WorkingDirectory = '%APP_DIR%'; " ^
     "$s2.Description = '配置Word-Markdown转换参数'; " ^
     "$s2.Save(); " ^
@@ -266,11 +294,11 @@ echo ============================================
 echo   安装完成！
 echo.
 echo   桌面上已创建 2 个图标：
-echo      转换工具        - 拖入 .docx 或 .md 自动识别转换
+echo      开始转换        - 拖入 .docx 或 .md 自动识别转换
 echo      转换设置        - 配置转换参数
 echo.
 echo   使用方法：
-echo     将 .docx 或 .md 文件拖到 [转换工具] 图标即可自动识别并转换。
+echo     将 .docx 或 .md 文件拖到 [开始转换] 图标即可自动识别并转换。
 echo     转换后的文件保存在原文件所在目录。
 echo.
 echo   提示：如需卸载，删除此文件夹和桌面图标即可。
@@ -283,8 +311,8 @@ pause
 
 def _create_readme_txt(dist_dir: Path):
     """生成使用说明。"""
-    content = """Word ↔ Markdown 转换工具 — 使用说明
-========================================
+    content = f"""Word ↔ Markdown 转换工具 v{APP_VERSION} — 使用说明
+================================================""
 
 📌 系统要求
   - Windows 10/11 (64位)
@@ -296,7 +324,7 @@ def _create_readme_txt(dist_dir: Path):
 
   2. 将文件拖到图标上即可自动识别转换方向：
 
-     🔄 转换工具    ← 拖入 .docx 或 .md 文件（自动识别）
+     🔄 开始转换    ← 拖入 .docx 或 .md 文件（自动识别）
      ⚙ 转换设置     → 双击打开参数设置
 
   3. 转换后的文件保存在原文件所在目录

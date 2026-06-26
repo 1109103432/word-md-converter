@@ -1,135 +1,197 @@
 # Word ↔ Markdown 转换工具
 
-将 Word 文档(.docx) 和 Markdown(.md) 互相转换的桌面工具，**只需一个图标**，拖入文件即可自动识别转换方向。
+**一个图标的双向文档转换器** — 拖入文件自动识别方向，双击图标剪贴板秒变 Word。
 
-## 功能特点
+![version](https://img.shields.io/badge/version-2.1.0-blue)
+![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey)
+![license](https://img.shields.io/badge/license-MIT-green)
 
-- 🖱️ **一键拖放** — 拖入 .docx 自动转 .md，拖入 .md 自动转 .docx，一个图标搞定
-- 📑 **标题映射** — Word 标题样式（标题 1~6）与 Markdown 标题（#~######）完美对应
-- 📝 **格式保留** — 保留粗体、斜体、删除线、代码块、超链接
-- 📊 **表格转换** — 双向转换 Word 表格 ↔ Markdown 表格
-- 🖼️ **图片提取** — Word 转 MD 时自动提取图片到本地
-- 📋 **列表支持** — 有序列表和无序列表双向保留
-- ⚙️ **参数设置** — 独立设置窗口，配置标题映射、通知参数等
-- 🔔 **浮窗通知** — 转换完成后右下角弹出结果通知
+---
 
-## 安装方法
+## ✨ 功能特点
 
-1. **确保已安装 Python 3.9+**
-   - 下载：https://www.python.org/downloads/
-   - 安装时勾选 "Add Python to PATH"
+| 功能 | 说明 |
+|------|------|
+| 🔄 **智能双向转换** | 拖入 `.docx` 自动转 `.md`，拖入 `.md` 自动转 `.docx`，无需手动选择方向 |
+| 📋 **剪贴板秒转 Word** | 双击图标，剪贴板里的 Markdown 内容直接变成 Word 文档（⭐ 核心巧思） |
+| 📑 **标题完美映射** | Word 大纲级别 ⇄ Markdown `#`~`######`，层级精准保留 |
+| 📊 **表格双向保留** | Word 表格 ↔ Markdown 表格，格式无损 |
+| 🖼️ **图片自动提取** | Word→MD 时图片自动导出到本地文件夹 |
+| 📝 **内联格式** | 粗体、斜体、删除线、行内代码、超链接 — 全部保留 |
+| 🔔 **原生通知** | Windows 10/11 系统通知，点通知直接打开文件所在目录 |
+| ⚙️ **可视化设置** | 模板选择、标题映射、开关项……无需编辑配置文件 |
+| 📦 **免安装运行** | 解压即用，无需 Python 环境，无需管理员权限 |
 
-2. **运行安装脚本**
-   - 双击 `install.bat`
-   - 脚本会自动安装依赖并在桌面创建 3 个图标
+---
 
-## 使用方式
+## 🎯 核心巧思：剪贴板 → Word
 
-### 基本使用
+**这是本工具最特别的功能。**
 
-将文件拖放到桌面图标上：
+设想这个场景：你在网页、编辑器、聊天记录里看到一段 Markdown 格式的文字，想把它们整理成规整的 Word 文档。
 
-| 图标 | 功能 | 拖入文件类型 |
-|------|------|-------------|
-| **转换工具** | 智能双向转换（自动识别方向） | .docx, .md, .markdown |
+传统做法：
+1. 打开 Word
+2. 粘贴（格式全乱）
+3. 逐一调整标题、加粗、表格……
+4. 保存
 
-转换后的文件将保存在原文件所在目录。
+本工具的做法：
+1. **复制** Markdown 内容（`Ctrl+C`）
+2. **双击** 桌面「开始转换」图标
+3. **完成** — 一个排版精美的 Word 文档已经出现在你面前
 
-### 参数设置
+文件名自动取 Markdown 第一个标题，无标题则用时间戳。这就是「剪贴板直转」的设计初衷——让 Markdown 到 Word 和复制粘贴一样简单。
 
-双击桌面上的 **⚙ 转换设置** 图标，可以配置：
-- **标题映射** — 自定义 Word 样式与 Markdown 标题的对应关系
-- **图片处理** — 是否提取图片、图片文件夹名称
-- **表格/列表/链接** — 是否保留对应格式
-- **通知设置** — 浮窗自动关闭时间、是否显示输出路径
+---
 
-### 命令行使用
+## 🧠 用户需求 & 解决场景
+
+| 谁会用 | 什么场景 | 本工具解决什么 |
+|--------|---------|---------------|
+| 📝 **写作者** | 用 Markdown 写初稿，投稿需 Word 格式 | 一键转 Word，排版自动处理 |
+| 🔧 **程序员** | 项目 README.md 要给客户看 | 拖入即转，客户看到的是专业 Word 文档 |
+| 📚 **学生/研究者** | 收集的 Word 资料想归档为 Markdown | 自动提取图片、保留表格层级 |
+| 📄 **办公人员** | Word 文档需发布到支持 Markdown 的平台 | Word→MD 保留所有格式细节 |
+| 💬 **所有人** | 看到一段好内容想存为文档 | 复制 → 双击图标 → 得到 Word |
+
+---
+
+## 🔬 工作原理
+
+```
+┌─────────────────────────────────────────────────────┐
+│                    用户输入                          │
+│  拖入文件(.docx/.md)  or  双击图标(读剪贴板)          │
+└─────────────────┬───────────────────────────────────┘
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│              自动识别转换方向                         │
+│   .docx/.md/.markdown/.txt/.text → 自动判定           │
+└─────────────────┬───────────────────────────────────┘
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│                Pandoc 转换引擎                        │
+│  • Word→MD: lxml修复样式→Pandoc gfm格式转换           │
+│  • MD→Word: Pandoc docx输出+reference-doc模板         │
+│  • Pandoc不可用时回退到 python-docx 原生引擎            │
+└─────────────────┬───────────────────────────────────┘
+                  ▼
+┌─────────────────────────────────────────────────────┐
+│              输出 + Windows 原生通知                   │
+│  转换文件保存到源文件目录 + 右下角 Toast 通知           │
+│  点击通知 → 打开文件所在文件夹                         │
+└─────────────────────────────────────────────────────┘
+```
+
+**技术栈**：Python + PySide6 (Qt GUI) + Pandoc + python-docx + lxml + win11toast
+
+---
+
+## ⚠️ 已知缺陷
+
+| 问题 | 严重程度 | 说明 |
+|------|---------|------|
+| 🔧 **设置窗口打开闪烁** | 中等 | 打开设置窗口时会有短暂的白屏闪烁，已尝试多种 Qt 方案修复（alpha 透明、geometry 预设、withdraw/update_idletasks），未能彻底解决。**欢迎 PR 帮助** |
+| 📦 **体积较大（~337 MB）** | 低 | Pandoc（221 MB）+ PySide6 Qt 框架（~100 MB）是两个 exe 体积大的主要原因。Pandoc 是 Haskell 编写的大型万能转换器，暂时无法替代 |
+| 🖼️ **Word 复杂排版丢失** | 低 | 文本框、艺术字、页眉页脚、分栏、浮动图片等高级 Word 特性无法转为 Markdown |
+| 📊 **合并单元格表格** | 低 | 原生引擎不支持合并单元格，Pandoc 引擎部分支持 |
+| 🖥️ **仅支持 Windows** | 中 | 依赖 Windows Toast 通知和 win11toast，macOS/Linux 用户需修改通知模块 |
+| 🔤 **.doc 不支持** | 低 | 仅支持 `.docx`（Word 2007+），旧版 `.doc` 需先用 Word 另存为 `.docx` |
+
+---
+
+## 🙏 关于作者
+
+我是一名 **没有编程背景的普通用户**，这个工具是用 AI 辅助（Claude Code）一行一行"聊"出来的。
+
+坦白说，我不会写代码。这个项目的每一行 Python 都是在 AI 的帮助下完成的——我描述需求，AI 生成代码，我测试反馈，AI 修复问题——如此反复数百轮。
+
+正因为如此：
+- 代码中可能存在不规范的地方，请多包涵
+- 如果你发现 bug 或有改进建议，请提 [Issue](https://github.com/issues)
+- 如果你擅长 Qt/PySide6 并知道如何修复**设置窗口打开闪烁**的问题，**非常需要你的帮助**
+
+这个项目证明了：**即使不会编程，只要有想法和耐心，也能做出实用的工具。**
+
+---
+
+## 🆘 求助：设置窗口打开闪烁
+
+### 问题描述
+
+双击「转换设置」打开设置窗口时，窗口会短暂白屏闪烁一下才显示内容。
+
+### 已尝试的方案（均未彻底解决）
+
+1. `setAttribute(Qt.WA_TranslucentBackground)` + alpha 渐变 — 窗口变全透明
+2. `geometry()` 一次性设置大小+位置 — 闪得更厉害
+3. `withdraw()` + `update_idletasks()` + `show()` — 闪烁依旧
+
+### 环境
+
+- Python 3.9+ / PySide6 6.5+
+- Qt Fusion 样式
+- Windows 11
+
+### 如果你知道解决方案
+
+请在 [Issues](https://github.com/issues) 区留言或直接提 PR，非常非常感谢 🙏
+
+---
+
+## 📥 安装与使用
+
+### 方式一：下载打包版（推荐，无需 Python）
+
+1. 下载 `Word-MD转换工具-v2.1.0.zip`
+2. 解压到任意目录（建议不放在桌面）
+3. 双击 `安装.bat` → 桌面出现两个图标
+4. 开始使用！
+
+### 方式二：源码运行（需 Python 3.9+）
 
 ```bash
-# 智能转换（自动识别方向）
-python src/converter_launcher.py document.docx   # → .md
-python src/converter_launcher.py document.md     # → .docx
-
-# 或者直接使用方向明确的脚本
-python src/word_to_md.py document.docx
-python src/md_to_word.py document.md
-
-# 设置界面
-python src/settings_app.py
+git clone https://github.com/xxx/doc-md.git
+cd doc-md
+pip install -r requirements.txt
+python setup_shortcuts.py   # 创建桌面快捷方式
 ```
 
-## 标题映射说明
+---
 
-### Word → Markdown
-
-| Word 样式 | Markdown |
-|-----------|----------|
-| Heading 1 / 标题 1 | `#` |
-| Heading 2 / 标题 2 | `##` |
-| Heading 3 / 标题 3 | `###` |
-| Heading 4 / 标题 4 | `####` |
-| Heading 5 / 标题 5 | `#####` |
-| Heading 6 / 标题 6 | `######` |
-
-### Markdown → Word
-
-| Markdown | Word 样式 |
-|----------|----------|
-| `#` | Heading 1 |
-| `##` | Heading 2 |
-| `###` | Heading 3 |
-| `####` | Heading 4 |
-| `#####` | Heading 5 |
-| `######` | Heading 6 |
-
-## 项目结构
+## 📂 项目结构
 
 ```
-doc-md-converter/
+doc-md/
 ├── src/
-│   ├── converter.py            # 核心转换引擎
-│   ├── converter_launcher.py   # 统一智能转换入口（自动识别方向）
-│   ├── word_to_md.py           # Word → MD 入口
-│   ├── md_to_word.py           # MD → Word 入口
-│   ├── settings_app.py         # 参数设置 GUI
-│   ├── notification.py         # 浮窗通知模块
-│   ├── config.py               # 配置管理
-│   └── generate_icons.py       # 图标生成
-├── icons/                 # 图标文件夹
-├── config.json            # 用户配置文件
-├── install.bat            # 安装脚本
-├── requirements.txt       # 依赖列表
-└── README.md              # 本文件
+│   ├── converter.py              # 核心转换引擎 (Word↔MD)
+│   ├── converter_launcher.py     # 开始转换入口 (拖放+剪贴板)
+│   ├── settings_app.py           # 转换设置 GUI
+│   ├── pandoc_engine.py          # Pandoc 引擎 + 模板管理
+│   ├── notification.py           # Windows Toast 通知
+│   └── config.py                 # 配置管理
+├── 模板/
+│   └── 内置模板.docx              # 内置 Word 参考模板
+├── icons/                        # 图标文件
+├── build.py                      # PyInstaller 打包脚本
+├── config.json                   # 默认配置
+├── requirements.txt              # Python 依赖
+└── README.md                     # 本文件
 ```
 
-## 配置文件
+---
 
-所有设置保存在 `config.json` 中，可以手动编辑：
+## 🤝 贡献
 
-```json
-{
-  "heading_mapping": {
-    "word_to_md": { "标题 1": "#", ... },
-    "md_to_word": { "#": "Heading 1", ... }
-  },
-  "extract_images": true,
-  "image_folder": "images",
-  "preserve_tables": true,
-  "output_encoding": "utf-8",
-  "notification": {
-    "auto_close_seconds": 5,
-    "show_output_path": true
-  }
-}
-```
+欢迎任何形式的贡献：
+- 🐛 报告 bug
+- 💡 提出新功能建议
+- 🔧 修复设置窗口闪烁问题（急需！）
+- 📖 改进文档
 
-## 依赖
+---
 
-- Python 3.9+
-- [python-docx](https://python-docx.readthedocs.io/) — Word 文档读写
-- [markdown](https://python-markdown.github.io/) — Markdown 解析
-- tkinter — GUI（Python 自带）
+## 📄 许可
 
-## 许可
-
-MIT
+MIT License — 可自由使用、修改、分发。

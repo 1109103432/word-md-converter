@@ -1,16 +1,19 @@
 """
 Word ↔ Markdown 统一转换入口
-用法：将 .docx 或 .md 文件拖放到桌面"转换工具"图标上即可自动识别并转换。
+用法：将 .docx/.doc 或 .md 文件拖放到桌面"开始转换"图标上即可自动识别并转换。
      支持同时拖入多个文件。
      或命令行：python converter_launcher.py <文件1> <文件2> ...
 
 自动判断规则：
   - .docx → 转换为 .md (Markdown)
+  - .doc  → 通过 Pandoc 转换为 .md（旧格式，建议先另存为 .docx）
   - .md / .markdown / .txt / .text → 转换为 .docx (Word)
 
 支持 PyInstaller 打包和直接源码运行两种模式。
 """
+import subprocess
 import sys
+import shutil
 from pathlib import Path
 
 # 源码运行时确保能找到同目录下的模块
@@ -23,8 +26,33 @@ from notification import show_notification
 from config import load_config
 
 # ── 支持的文件类型 ──
-WORD_EXTENSIONS = {".docx"}  # python-docx 仅支持 .docx
+WORD_EXTENSIONS = {".docx"}                        # python-docx 原生支持
+LEGACY_WORD_EXTENSIONS = {".doc"}                  # 旧格式，Pandoc 直接转换
 MD_EXTENSIONS = {".md", ".markdown", ".txt", ".text"}
+
+# ── Pandoc 路径缓存 ──
+_PANDOC_PATH: str | None = None
+
+
+def _get_pandoc_exe() -> str | None:
+    """查找 pandoc 可执行文件，结果缓存。"""
+    global _PANDOC_PATH
+    if _PANDOC_PATH is not None:
+        return _PANDOC_PATH
+
+    # 先尝试 pandoc_engine 的查找逻辑
+    try:
+        from pandoc_engine import _find_pandoc
+        _PANDOC_PATH = _find_pandoc()
+        if _PANDOC_PATH:
+            return _PANDOC_PATH
+    except ImportError:
+        pass
+
+    # 回退到系统 PATH
+    found = shutil.which("pandoc")
+    _PANDOC_PATH = found if found else ""
+    return _PANDOC_PATH or None
 
 
 def main():
@@ -37,7 +65,8 @@ def main():
         return
 
     # ── 收集并分类所有输入文件 ──
-    word_files = []   # (Path, suffix)
+    word_files = []
+    doc_files = []    # 旧格式 .doc，单独处理
     md_files = []
     not_found = []
     unsupported = []
@@ -50,6 +79,8 @@ def main():
         suffix = p.suffix.lower()
         if suffix in WORD_EXTENSIONS:
             word_files.append(p)
+        elif suffix in LEGACY_WORD_EXTENSIONS:
+            doc_files.append(p)
         elif suffix in MD_EXTENSIONS:
             md_files.append(p)
         else:
@@ -57,11 +88,17 @@ def main():
 
     # ── 统计 ──
     ok, fail = 0, 0
-    total = len(word_files) + len(md_files) + len(not_found) + len(unsupported)
+    total = len(word_files) + len(doc_files) + len(md_files) + len(not_found) + len(unsupported)
     batch_mode = total > 1
 
     for p in word_files:
         if _convert_word_to_md(p, config, duration, notify=not batch_mode):
+            ok += 1
+        else:
+            fail += 1
+
+    for p in doc_files:
+        if _convert_doc_to_md(p, config, duration, notify=not batch_mode):
             ok += 1
         else:
             fail += 1
@@ -93,7 +130,7 @@ def main():
             message=f"无法识别该文件类型。\n\n"
                     f"文件：{p.name}\n"
                     f"后缀：{p.suffix}\n\n"
-                    f"支持：.docx / .md / .markdown / .txt",
+                    f"支持：.docx / .doc / .md / .markdown / .txt",
             is_error=True,
             auto_close=10,
         )
@@ -144,6 +181,109 @@ def _convert_word_to_md(input_path: Path, config: dict, duration: str,
             show_notification(
                 title="转换失败  Word → Markdown",
                 message=f"转换过程中发生错误：\n{str(e)}",
+                is_error=True,
+                auto_close="long",
+            )
+        return False
+
+
+def _convert_doc_to_md(input_path: Path, config: dict, duration: str,
+                       notify: bool = True) -> bool:
+    """旧格式 .doc → Markdown 转换（通过 Pandoc 直接读取）。
+
+    .doc 是 Word 97-2003 二进制格式，python-docx 无法读取。
+    此函数调用 Pandoc 原生 doc 读取器进行转换，格式支持可能不完整。
+    对用户提示格式已过时，建议先用 Word 另存为 .docx。
+    返回 True=成功, False=失败。
+    """
+    pandoc = _get_pandoc_exe()
+    if not pandoc:
+        if notify:
+            show_notification(
+                title="⚠ 缺少 Pandoc，无法转换旧格式",
+                message=f"文件：{input_path.name}\n\n"
+                        f".doc 是旧版 Word 格式，python-docx 无法读取。\n"
+                        f"当前未找到 Pandoc 引擎，请：\n\n"
+                        f"  1. 用 Word 打开该文件\n"
+                        f"  2. 另存为 .docx 格式\n"
+                        f"  3. 重新拖入 .docx 文件",
+                is_error=True,
+                auto_close="long",
+            )
+        return False
+
+    output_path = input_path.with_suffix(".md")
+
+    try:
+        result = subprocess.run(
+            [
+                pandoc,
+                str(input_path),
+                "-f", "doc",
+                "-t", "gfm",
+                "-o", str(output_path),
+                "--wrap=none",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            error_detail = (result.stderr or "未知错误")[:300]
+            if notify:
+                show_notification(
+                    title="❌ .doc 转换失败",
+                    message=f"文件：{input_path.name}\n\n"
+                            f"该 .doc 文件可能包含复杂排版，Pandoc 无法处理。\n\n"
+                            f"💡 建议操作：\n"
+                            f"  1. 用 Word 打开该文件\n"
+                            f"  2. 另存为 .docx 格式\n"
+                            f"  3. 重新拖入 .docx 文件\n\n"
+                            f"错误详情：{error_detail}",
+                    is_error=True,
+                    auto_close="long",
+                )
+            return False
+
+        # ── 读取转换结果 ──
+        md_content = output_path.read_text(encoding="utf-8")
+
+        # ── 显示警告性成功通知（提醒 .doc 已过时）──
+        if notify:
+            show_notification(
+                title="⚠ .doc 已转换 · 格式已过时",
+                message=f"源文件：{input_path.name}\n"
+                        f"输出文件：{output_path.name}\n\n"
+                        f"⚠ 注意：\n"
+                        f"  .doc 是 Word 97-2003 旧格式，已过时。\n"
+                        f"  图片、表格等复杂内容可能丢失。\n\n"
+                        f"💡 建议：\n"
+                        f"  用 Word 另存为 .docx 格式\n"
+                        f"  可获得最佳转换效果。",
+                output_path=str(output_path),
+                auto_close="long",
+            )
+        return True
+
+    except subprocess.TimeoutExpired:
+        if notify:
+            show_notification(
+                title="❌ .doc 转换超时",
+                message=f"文件：{input_path.name}\n\n"
+                        f"文件过大或结构复杂导致转换超时。\n\n"
+                        f"💡 建议用 Word 另存为 .docx 后重试。",
+                is_error=True,
+                auto_close="long",
+            )
+        return False
+    except Exception as e:
+        if notify:
+            show_notification(
+                title="❌ .doc 转换失败",
+                message=f"文件：{input_path.name}\n"
+                        f"错误：{str(e)}\n\n"
+                        f"💡 建议用 Word 另存为 .docx 后重试。",
                 is_error=True,
                 auto_close="long",
             )
@@ -205,6 +345,7 @@ def _convert_clipboard_to_docx(config: dict, duration: str):
                     "💡 双击图标 = 剪贴板 → Word\n"
                     "💡 拖入文件 = 自动识别转换\n\n"
                     "📄  拖入 .docx → .md\n"
+                    "📄  拖入 .doc → .md（旧格式，建议先转 .docx）\n"
                     "📝  拖入 .md → .docx",
             auto_close=8,
         )

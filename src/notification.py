@@ -3,7 +3,7 @@ Windows 系统通知模块 — 使用 win11toast (WinRT 原生 API)。
 
 通过自定义 AppUserModelID + 开始菜单快捷方式，支持：
 - 点击通知打开输出文件所在文件夹
-- 多种通知停留时长（短/中/长/持续/紧急）
+- 多种通知停留时长（短/中/长/持续）
 
 流程：
   notify() → WinRT Show() → sleep(0.5s) → 退出
@@ -83,9 +83,6 @@ _DURATION_MAP = {
     # 持续显示（手动关闭才消失）
     "持续":   {"duration": "long",  "scenario": "reminder"},
     "keep":   {"duration": "long",  "scenario": "reminder"},
-    # 紧急（持续 + 循环提醒音）
-    "紧急":   {"duration": "long",  "scenario": "alarm"},
-    "alarm":  {"duration": "long",  "scenario": "alarm"},
 }
 
 
@@ -108,7 +105,6 @@ def show_notification(
             "10秒"/"medium" → 中 (~12s)
             "25秒"/"long"   → 长 (~25s)
             "持续"/"keep"   → 持续显示（手动关闭）
-            "紧急"/"alarm"  → 持续 + 循环提醒音
         is_error: 是否为错误通知
     """
     # ── 通知开关 ──

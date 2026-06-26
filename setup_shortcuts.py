@@ -2,7 +2,7 @@
 桌面快捷方式创建工具 — 开发/测试用。
 
 创建 2 个桌面快捷方式：
-  - 转换工具  → converter_launcher.py（拖放文件 + 双击剪贴板→Word）
+  - 开始转换  → converter_launcher.py（拖放文件 + 双击剪贴板→Word）
   - 转换设置  → settings_app.py（参数配置）
 
 用法: python setup_shortcuts.py
@@ -22,7 +22,7 @@ DESKTOP = Path.home() / "Desktop"
 
 SHORTCUTS = [
     {
-        "name": "转换工具",
+        "name": "开始转换",
         "script": str(SRC / "converter_launcher.py"),
         "desc": "Word-Markdown双向转换 - 拖放文件或双击转换剪贴板",
     },
