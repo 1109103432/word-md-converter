@@ -1,6 +1,6 @@
 # Word-MD快速转换
 
-**一个图标的双向文档转换器** — 拖入文件自动识别方向，双击图标剪贴板秒变 Word。
+**一键实现三向转换文档的工具** — 拖入文件自动识别方向，双击图标剪贴板秒变 Word。
 
 ![version](https://img.shields.io/badge/version-2.2.3-blue)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey)
