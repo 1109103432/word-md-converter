@@ -27,7 +27,7 @@ from pathlib import Path
 # 确保中文输出不乱码
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.2.3"
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
