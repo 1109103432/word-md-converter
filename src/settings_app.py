@@ -619,7 +619,11 @@ class SettingsWindow(QMainWindow):
     # ═══════════════════════════════════════════════════════
 
     def _build_md2word_tab(self) -> QWidget:
-        """构建 MD→Word 标签页。"""
+        """构建 MD→Word 标签页（可滚动）。"""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+
         tab = QWidget()
         layout = QVBoxLayout(tab)
         layout.setContentsMargins(18, 14, 18, 14)
@@ -639,7 +643,8 @@ class SettingsWindow(QMainWindow):
 
         layout.addStretch()
 
-        return tab
+        scroll.setWidget(tab)
+        return scroll
 
     def _build_pandoc_status(self) -> QWidget:
         """Pandoc 引擎状态显示。"""
