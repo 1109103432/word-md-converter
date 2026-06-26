@@ -383,8 +383,13 @@ def _convert_clipboard_to_docx(config: dict, duration: str):
         )
         return
 
-    # ── 2. 确定输出目录（快捷方式所在目录 = 当前工作目录）──
-    output_dir = Path.cwd()
+    # ── 2. 确定输出目录 ──
+    custom_dir = config.get("clipboard_output_dir", "")
+    if custom_dir and Path(custom_dir).is_dir():
+        output_dir = Path(custom_dir)
+    else:
+        # 留空则默认快捷方式所在目录（WorkingDirectory = Desktop）
+        output_dir = Path.cwd()
 
     # ── 3. 生成文件名（优先用 md 首行标题）──
     first_line = md_content.strip().split("\n")[0].strip()

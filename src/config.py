@@ -21,6 +21,7 @@ _DEFAULT_CONFIG = {
     "output_encoding": "utf-8",
     "add_toc": True,
     "pandoc_reference_doc": "built-in",
+    "clipboard_output_dir": "",   # 空 = 使用快捷方式所在目录（桌面）
     "notification": {
         "enabled": True,
         "show_success": True,

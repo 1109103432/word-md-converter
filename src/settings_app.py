@@ -474,6 +474,7 @@ class SettingsWindow(QMainWindow):
 
         # QLineEdit — textChanged
         self.image_folder_input.textChanged.connect(self._mark_dirty)
+        self.clipboard_dir_input.textChanged.connect(self._mark_dirty)
 
         # QComboBox — currentIndexChanged
         self.encoding_combo.currentIndexChanged.connect(self._mark_dirty)
@@ -627,6 +628,9 @@ class SettingsWindow(QMainWindow):
         # ── Pandoc 状态 ──
         layout.addWidget(self._build_pandoc_status())
 
+        # ── 粘贴板导出目录 ──
+        layout.addWidget(self._build_clipboard_output_dir())
+
         # ── 样式模板 ──
         layout.addWidget(self._build_template_section())
 
@@ -662,6 +666,44 @@ class SettingsWindow(QMainWindow):
         layout.addWidget(desc)
 
         return group
+
+    def _build_clipboard_output_dir(self) -> QWidget:
+        """粘贴板导出目录设置。"""
+        group = QGroupBox("📋 粘贴板导出目录")
+        layout = QVBoxLayout(group)
+        layout.setSpacing(8)
+
+        hint = self._make_label(
+            "双击图标粘贴板→Word 时，文档的输出位置。\n"
+            "留空则默认保存到快捷方式所在目录（桌面）。",
+            object_name="descLabel", word_wrap=True)
+        layout.addWidget(hint)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.clipboard_dir_input = self._protect_text_widget(QLineEdit())
+        self.clipboard_dir_input.setPlaceholderText("留空 = 快捷方式所在目录（桌面）")
+        self.clipboard_dir_input.setMinimumWidth(280)
+        row.addWidget(self.clipboard_dir_input)
+
+        browse_btn = QPushButton("浏览...")
+        browse_btn.clicked.connect(self._browse_clipboard_dir)
+        row.addWidget(browse_btn)
+
+        layout.addLayout(row)
+        return group
+
+    def _browse_clipboard_dir(self):
+        """打开文件夹选择对话框。"""
+        from PySide6.QtWidgets import QFileDialog
+        current = self.clipboard_dir_input.text().strip()
+        if not current:
+            current = str(Path.home() / "Desktop")
+        folder = QFileDialog.getExistingDirectory(
+            self, "选择粘贴板导出目录", current)
+        if folder:
+            self.clipboard_dir_input.setText(folder)
+            self._mark_dirty()
 
     def _build_template_section(self) -> QWidget:
         """样式模板选择区域。"""
@@ -1053,6 +1095,10 @@ class SettingsWindow(QMainWindow):
         ref_doc = self.config.get("pandoc_reference_doc", "built-in")
         self._set_selected_template(ref_doc)
 
+        # ── Tab 1: 粘贴板导出目录 ──
+        self.clipboard_dir_input.setText(
+            self.config.get("clipboard_output_dir", ""))
+
         # ── Tab 2: 内容提取 ──
         self.preserve_tables_cb.setChecked(
             self.config.get("preserve_tables", True))
@@ -1093,6 +1139,10 @@ class SettingsWindow(QMainWindow):
         """收集 UI 值并保存配置。"""
         # ── Tab 1: 模板 ──
         self.config["pandoc_reference_doc"] = self._get_selected_template()
+
+        # ── Tab 1: 粘贴板导出目录 ──
+        cd = self.clipboard_dir_input.text().strip()
+        self.config["clipboard_output_dir"] = cd if cd else ""
 
         # ── Tab 2: 内容提取 ──
         self.config["preserve_tables"] = self.preserve_tables_cb.isChecked()
