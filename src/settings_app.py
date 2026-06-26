@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QMessageBox,
     QFrame,
+    QScrollArea,
     QSizePolicy,
 )
 from PySide6.QtCore import Qt, QPoint
