@@ -92,7 +92,7 @@ def main():
             f"$sc = $ws.CreateShortcut('{lnk}'); "
             f"$sc.TargetPath = '{pythonw}'; "
             f"$sc.Arguments = '{sc['script']} {sc['args']}'; "
-            f"$sc.WorkingDirectory = '{DESKTOP}'; "
+            f"$sc.WorkingDirectory = '{str(DESKTOP)}'; "
             f"$sc.Description = '{sc['desc']}'; "
             f"$sc.Save(); "
             f"Write-Output 'Done: {sc['name']}'"

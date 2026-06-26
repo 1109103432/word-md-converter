@@ -281,7 +281,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$s1 = $WshShell.CreateShortcut(\"$Desktop\开始转换.lnk\"); " ^
     "$s1.TargetPath = '%APP_DIR%\bin\转换工具.exe'; " ^
     "$s1.IconLocation = '%APP_DIR%\bin\转换工具.exe,0'; " ^
-    "$s1.WorkingDirectory = '%APP_DIR%'; " ^
+    "$s1.WorkingDirectory = $Desktop; " ^
     "$s1.Description = 'Word-MD快速转换 - 拖放文件 / 双击剪贴板→Word'; " ^
     "$s1.Save(); " ^
     "" ^
@@ -289,7 +289,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$s2.TargetPath = '%APP_DIR%\bin\转换工具.exe'; " ^
     "$s2.Arguments = '--settings'; " ^
     "$s2.IconLocation = '%APP_DIR%\bin\settings.ico,0'; " ^
-    "$s2.WorkingDirectory = '%APP_DIR%'; " ^
+    "$s2.WorkingDirectory = $Desktop; " ^
     "$s2.Description = '配置Word-MD快速转换参数'; " ^
     "$s2.Save(); " ^
     "" ^
