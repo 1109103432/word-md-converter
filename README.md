@@ -2,7 +2,7 @@
 
 **一个图标的双向文档转换器** — 拖入文件自动识别方向，双击图标剪贴板秒变 Word。
 
-![version](https://img.shields.io/badge/version-2.1.0-blue)
+![version](https://img.shields.io/badge/version-2.2.1-blue)
 ![platform](https://img.shields.io/badge/platform-Windows%2010%2F11-lightgrey)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -18,6 +18,7 @@
 | 📊 **表格双向保留** | Word 表格 ↔ Markdown 表格，格式无损 |
 | 🖼️ **图片自动提取** | Word→MD 时图片自动导出到本地文件夹 |
 | 📝 **内联格式** | 粗体、斜体、删除线、行内代码、超链接 — 全部保留 |
+| 📐 **Word 格式可控** | MD→Word 严格按模板样式导出，内置通用模板，支持自定义模板切换 |
 | 🔔 **原生通知** | Windows 10/11 系统通知，点通知直接打开文件所在目录 |
 | ⚙️ **可视化设置** | 模板选择、标题映射、开关项……无需编辑配置文件 |
 | 📦 **免安装运行** | 解压即用，无需 Python 环境，无需管理员权限 |
@@ -50,7 +51,7 @@
 | 谁会用 | 什么场景 | 本工具解决什么 |
 |--------|---------|---------------|
 | 📝 **写作者** | 用 Markdown 写初稿，投稿需 Word 格式 | 一键转 Word，排版自动处理 |
-| 🔧 **程序员** | 项目 README.md 要给客户看 | 拖入即转，客户看到的是专业 Word 文档 |
+| 🔧 **文字工作者** | AI 输出的 Markdown 文本，需转为格式严谨的 Word 文档 | 复制 → 双击图标 → 一键转为模板样式统一的 Word |
 | 📚 **学生/研究者** | 收集的 Word 资料想归档为 Markdown | 自动提取图片、保留表格层级 |
 | 📄 **办公人员** | Word 文档需发布到支持 Markdown 的平台 | Word→MD 保留所有格式细节 |
 | 💬 **所有人** | 看到一段好内容想存为文档 | 复制 → 双击图标 → 得到 Word |
@@ -93,11 +94,11 @@
 | 问题 | 严重程度 | 说明 |
 |------|---------|------|
 | 🔧 **设置窗口打开闪烁** | 中等 | 打开设置窗口时会有短暂的白屏闪烁，已尝试多种 Qt 方案修复（alpha 透明、geometry 预设、withdraw/update_idletasks），未能彻底解决。**欢迎 PR 帮助** |
-| 📦 **体积较大（~337 MB）** | 低 | Pandoc（221 MB）+ PySide6 Qt 框架（~100 MB）是两个 exe 体积大的主要原因。Pandoc 是 Haskell 编写的大型万能转换器，暂时无法替代 |
+| 📦 **体积较大（~280 MB）** | 低 | Pandoc（221 MB）+ PySide6 Qt 框架（~50 MB），单 exe 合并已节省 ~56 MB。Pandoc 是 Haskell 编写的大型万能转换器，暂时无法替代 |
 | 🖼️ **Word 复杂排版丢失** | 低 | 文本框、艺术字、页眉页脚、分栏、浮动图片等高级 Word 特性无法转为 Markdown |
 | 📊 **合并单元格表格** | 低 | 原生引擎不支持合并单元格，Pandoc 引擎部分支持 |
 | 🖥️ **仅支持 Windows** | 中 | 依赖 Windows Toast 通知和 win11toast，macOS/Linux 用户需修改通知模块 |
-| 🔤 **.doc 不支持** | 低 | 仅支持 `.docx`（Word 2007+），旧版 `.doc` 需先用 Word 另存为 `.docx` |
+| 🔤 **.doc 有限支持** | 低 | `.doc` 通过 Pandoc 直接读取，图片/表格等复杂内容可能丢失，建议先用 Word 另存为 `.docx` |
 
 ---
 
@@ -111,8 +112,6 @@
 - 代码中可能存在不规范的地方，请多包涵
 - 如果你发现 bug 或有改进建议，请提 [Issue](https://github.com/issues)
 - 如果你擅长 Qt/PySide6 并知道如何修复**设置窗口打开闪烁**的问题，**非常需要你的帮助**
-
-这个项目证明了：**即使不会编程，只要有想法和耐心，也能做出实用的工具。**
 
 ---
 
@@ -152,7 +151,7 @@
 ### 方式二：源码运行（需 Python 3.9+）
 
 ```bash
-git clone https://github.com/xxx/doc-md.git
+git clone https://github.com/1109103432/word-md-converter.git
 cd doc-md
 pip install -r requirements.txt
 python setup_shortcuts.py   # 创建桌面快捷方式
