@@ -23,13 +23,15 @@ DESKTOP = Path.home() / "Desktop"
 SHORTCUTS = [
     {
         "name": "开始转换",
-        "script": str(SRC / "converter_launcher.py"),
-        "desc": "Word-Markdown双向转换 - 拖放文件或双击转换剪贴板",
+        "script": str(SRC / "launcher.py"),
+        "args": "",
+        "desc": "Word-MD快速转换 - 拖放文件 / 双击剪贴板→Word",
     },
     {
         "name": "转换设置",
-        "script": str(SRC / "settings_app.py"),
-        "desc": "配置Word-Markdown转换参数",
+        "script": str(SRC / "launcher.py"),
+        "args": "--settings",
+        "desc": "配置Word-MD快速转换参数",
     },
 ]
 
@@ -89,7 +91,7 @@ def main():
             f"$ws = New-Object -ComObject WScript.Shell; "
             f"$sc = $ws.CreateShortcut('{lnk}'); "
             f"$sc.TargetPath = '{pythonw}'; "
-            f"$sc.Arguments = '{sc['script']}'; "
+            f"$sc.Arguments = '{sc['script']} {sc['args']}'; "
             f"$sc.WorkingDirectory = '{DESKTOP}'; "
             f"$sc.Description = '{sc['desc']}'; "
             f"$sc.Save(); "

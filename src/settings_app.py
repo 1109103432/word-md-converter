@@ -402,7 +402,7 @@ class SettingsWindow(QMainWindow):
 
     def _setup_window(self):
         """配置窗口属性。"""
-        self.setWindowTitle("Word ↔ Markdown 转换设置")
+        self.setWindowTitle("Word-MD快速转换设置")
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
 

@@ -1,5 +1,5 @@
 """
-Word ↔ Markdown 统一转换入口
+Word-MD快速转换 — 统一转换入口
 用法：将 .docx/.doc 或 .md 文件拖放到桌面"开始转换"图标上即可自动识别并转换。
      支持同时拖入多个文件。
      或命令行：python converter_launcher.py <文件1> <文件2> ...
@@ -340,7 +340,7 @@ def _convert_clipboard_to_docx(config: dict, duration: str):
     except tk.TclError:
         # 剪贴板无文本内容
         show_notification(
-            title="Word ↔ Markdown 转换工具",
+            title="Word-MD快速转换",
             message="📋 剪贴板内无文本内容。\n\n"
                     "💡 双击图标 = 剪贴板 → Word\n"
                     "💡 拖入文件 = 自动识别转换\n\n"
@@ -361,7 +361,7 @@ def _convert_clipboard_to_docx(config: dict, duration: str):
 
     if not md_content or not md_content.strip():
         show_notification(
-            title="Word ↔ Markdown 转换工具",
+            title="Word-MD快速转换",
             message="📋 剪贴板为空。\n\n"
                     "💡 双击图标 = 剪贴板 → Word\n"
                     "💡 拖入文件 = 自动识别转换",

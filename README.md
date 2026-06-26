@@ -1,4 +1,4 @@
-# Word ↔ Markdown 转换工具
+# Word-MD快速转换
 
 **一个图标的双向文档转换器** — 拖入文件自动识别方向，双击图标剪贴板秒变 Word。
 
@@ -144,7 +144,7 @@
 
 ### 方式一：下载打包版（推荐，无需 Python）
 
-1. 下载 `Word-MD转换工具-v2.1.0.zip`
+1. 下载 `Word-MD快速转换-v2.2.1.zip`
 2. 解压到任意目录（建议不放在桌面）
 3. 双击 `安装.bat` → 桌面出现两个图标
 4. 开始使用！
@@ -165,8 +165,9 @@ python setup_shortcuts.py   # 创建桌面快捷方式
 ```
 doc-md/
 ├── src/
+│   ├── launcher.py               # 统一启动入口 (--settings 切换模式)
 │   ├── converter.py              # 核心转换引擎 (Word↔MD)
-│   ├── converter_launcher.py     # 开始转换入口 (拖放+剪贴板)
+│   ├── converter_launcher.py     # 转换器逻辑 (拖放+剪贴板)
 │   ├── settings_app.py           # 转换设置 GUI
 │   ├── pandoc_engine.py          # Pandoc 引擎 + 模板管理
 │   ├── notification.py           # Windows Toast 通知

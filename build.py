@@ -1,14 +1,22 @@
 """
-PyInstaller 打包脚本 —— 将两个入口分别构建为独立 .exe 文件。
+PyInstaller 打包脚本 —— 构建单个 exe，通过命令行参数切换模式。
 
 用法: python build.py
 
 输出结构 (dist/):
-  ├── 开始转换.exe       (~20MB, 智能双向转换，自动识别文件类型)
-  ├── 转换设置.exe       (~20MB, 参数配置)
+  ├── 转换工具.exe       (~60MB, 统一入口，二合一)
+  │                       双击 / 拖放 → 智能双向转换 + 剪贴板→Word
+  │                       --settings → 参数配置窗口
   ├── config.json        (用户可编辑的配置文件)
   ├── 安装.bat           (终端用户安装脚本)
   └── 使用说明.txt       (简易说明)
+
+两个桌面快捷方式指向同一个 exe：
+  开始转换.lnk  → 开始转换.exe
+  转换设置.lnk  → 开始转换.exe --settings
+
+合并前: 两个 exe (116MB)，Qt 重复打包
+合并后: 一个 exe (~60MB)，节省 ~56MB
 """
 import subprocess
 import shutil
@@ -19,7 +27,7 @@ from pathlib import Path
 # 确保中文输出不乱码
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.1"
 
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
@@ -34,16 +42,10 @@ for d in [DIST, BUILD]:
 
 EXE_CONFIGS = [
     {
-        "script": str(SRC / "converter_launcher.py"),
-        "name": "开始转换",
+        "script": str(SRC / "launcher.py"),
+        "name": "转换工具",
         "icon": str(ICONS / "converter.ico"),
-        "desc": "Word ↔ Markdown 智能转换 - 拖入文件自动识别方向",
-    },
-    {
-        "script": str(SRC / "settings_app.py"),
-        "name": "转换设置",
-        "icon": str(ICONS / "settings.ico"),
-        "desc": "配置Word-Markdown转换参数",
+        "desc": "Word-MD快速转换 - 拖入文件 / 剪贴板直转 / --settings 设置",
     },
 ]
 
@@ -119,7 +121,8 @@ def build_exe(config: dict) -> bool:
 
 def main():
     print("=" * 60)
-    print(f"  Word ↔ Markdown 转换工具 v{APP_VERSION} - PyInstaller 打包")
+    print(f"  Word-MD快速转换 v{APP_VERSION} - PyInstaller 打包")
+    print(f"  模式: 单 exe 双模式 (--settings 切换设置)")
     print("=" * 60)
     print(f"  Python: {sys.version}")
     print(f"  项目根目录: {ROOT}")
@@ -182,17 +185,23 @@ def main():
     # ── 隐藏可执行文件到 bin/ 目录 ──
     bin_dir = DIST / "bin"
     bin_dir.mkdir(exist_ok=True)
-    for exe_name in ["开始转换.exe", "转换设置.exe", "pandoc.exe"]:
+    for exe_name in ["转换工具.exe", "pandoc.exe"]:
         src = DIST / exe_name
         if src.exists():
             shutil.move(str(src), str(bin_dir / exe_name))
+
+    # 复制设置图标到 bin/（用于转换设置快捷方式的独立图标）
+    settings_ico = ICONS / "settings.ico"
+    if settings_ico.exists():
+        shutil.copy(str(settings_ico), str(bin_dir / "settings.ico"))
+        print(f"  [OK] bin/settings.ico")
     # Windows 隐藏 bin 目录
     try:
         import ctypes
         ctypes.windll.kernel32.SetFileAttributesW(str(bin_dir), 0x02)  # FILE_ATTRIBUTE_HIDDEN
     except Exception:
         pass
-    print(f"  [OK] bin/ (隐藏的可执行文件)")
+    print(f"  [OK] bin/ (隐藏的可执行文件 + 单 exe 双模式)")
 
     # 创建终端用户安装脚本
     _create_installer_bat(DIST)
@@ -217,7 +226,7 @@ def main():
             print(f"    {f.name}  ({size:.1f} MB)")
 
     # 创建 zip
-    zip_path = ROOT / f"Word-MD转换工具-v{APP_VERSION}.zip"
+    zip_path = ROOT / f"Word-MD快速转换-v{APP_VERSION}.zip"
     print(f"\n  正在创建压缩包...")
     shutil.make_archive(
         str(zip_path.with_suffix("")),
@@ -236,16 +245,16 @@ def _create_installer_bat(dist_dir: Path):
     """生成终端用户安装脚本。"""
     content = r"""@echo off
 chcp 65001 >nul
-title Word ^<-^> Markdown 转换工具 - 安装
+title Word-MD快速转换 - 安装
 
 echo.
 echo ============================================
-echo   Word ^<-^> Markdown 转换工具 安装程序
+echo   Word-MD快速转换 安装程序
 echo ============================================
 echo.
-echo   本工具包含两个程序：
-echo      [开始转换]    拖入 .docx 自动转 .md，拖入 .md 自动转 .docx
-echo      [转换设置]    配置转换参数
+echo   两个桌面图标共用一个程序，自动识别模式：
+echo      [开始转换]    双击 = 剪贴板转Word / 拖入文件自动识别
+echo      [转换设置]    双击 = 配置转换参数
 echo.
 
 :: 获取本目录
@@ -270,17 +279,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$Desktop = [Environment]::GetFolderPath('Desktop'); " ^
     "" ^
     "$s1 = $WshShell.CreateShortcut(\"$Desktop\开始转换.lnk\"); " ^
-    "$s1.TargetPath = '%APP_DIR%\bin\开始转换.exe'; " ^
-    "$s1.IconLocation = '%APP_DIR%\bin\开始转换.exe,0'; " ^
+    "$s1.TargetPath = '%APP_DIR%\bin\转换工具.exe'; " ^
+    "$s1.IconLocation = '%APP_DIR%\bin\转换工具.exe,0'; " ^
     "$s1.WorkingDirectory = '%APP_DIR%'; " ^
-    "$s1.Description = 'Word-Markdown双向智能转换 - 拖放文件到此图标即可自动识别'; " ^
+    "$s1.Description = 'Word-MD快速转换 - 拖放文件 / 双击剪贴板→Word'; " ^
     "$s1.Save(); " ^
     "" ^
     "$s2 = $WshShell.CreateShortcut(\"$Desktop\转换设置.lnk\"); " ^
-    "$s2.TargetPath = '%APP_DIR%\bin\转换设置.exe'; " ^
-    "$s2.IconLocation = '%APP_DIR%\bin\转换设置.exe,0'; " ^
+    "$s2.TargetPath = '%APP_DIR%\bin\转换工具.exe'; " ^
+    "$s2.Arguments = '--settings'; " ^
+    "$s2.IconLocation = '%APP_DIR%\bin\settings.ico,0'; " ^
     "$s2.WorkingDirectory = '%APP_DIR%'; " ^
-    "$s2.Description = '配置Word-Markdown转换参数'; " ^
+    "$s2.Description = '配置Word-MD快速转换参数'; " ^
     "$s2.Save(); " ^
     "" ^
     "Write-Output '快捷方式创建完成'"
@@ -293,8 +303,8 @@ echo.
 echo ============================================
 echo   安装完成！
 echo.
-echo   桌面上已创建 2 个图标：
-echo      开始转换        - 拖入 .docx 或 .md 自动识别转换
+echo   桌面上已创建 2 个图标（共用一个程序）：
+echo      开始转换        - 双击=剪贴板转Word / 拖入文件自动识别转换
 echo      转换设置        - 配置转换参数
 echo.
 echo   使用方法：
@@ -311,7 +321,7 @@ pause
 
 def _create_readme_txt(dist_dir: Path):
     """生成使用说明。"""
-    content = f"""Word ↔ Markdown 转换工具 v{APP_VERSION} — 使用说明
+    content = f"""Word-MD快速转换 v{APP_VERSION} — 使用说明
 ================================================""
 
 📌 系统要求
